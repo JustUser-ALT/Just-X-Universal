@@ -27,12 +27,11 @@ local Window = JL:Window({
 local Main = Window:Tab({
     Name = "Main",
     Icon = "⌂",
-    Type = "Grid"
+    Type = "List"
 })
 
 local Camera = Main:Section({
-    Title = "Camera",
-    Column = 1
+    Title = "Camera"
 })
 
 local Misc = Window:Tab({
@@ -221,7 +220,7 @@ local function buildPlayerRow(player, order)
 
     click.MouseButton1Click:Connect(function()
         expandedByPlayer[player] = not expandedByPlayer[player]
-        refreshQueued = true
+        refreshLeaderboard()
     end)
 
     if expandedByPlayer[player] then
