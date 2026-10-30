@@ -1,353 +1,751 @@
 -- Just X Universal
--- Universal utilities: Max Zoom + Custom Leaderboard
--- Note: Roblox does not replicate other players' Backpack contents to clients.
--- The leaderboard can show equipped Tools; full inventory requires server/game support.
+-- Built on JustLib (Grid layout, 3 columns)
+-- Features: Character, Visual, Misc
 
 local Players = game:GetService("Players")
-local StarterGui = game:GetService("StarterGui")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 
-local LIBRARY_URL = "https://raw.githubusercontent.com/JustUser-ALT/JustXHub/main/Library"
-local JL
-local ok, result = pcall(function()
+local LIBRARY_URL = "https://raw.githubusercontent.com/JustUser-ALT/JustLib/main/JustLib.lua"
+local ok, JL = pcall(function()
     return loadstring(game:HttpGet(LIBRARY_URL))()
 end)
-if not ok or type(result) ~= "table" then
-    warn("[Just X Universal] Failed to load JustXHub Library:", result)
+if not ok or type(JL) ~= "table" or type(JL.Window) ~= "function" then
+    warn("[Just X Universal] JustLib failed to load:", JL)
     return
 end
-JL = result
 
 local Window = JL:Window({
     Title = "Just X Universal",
-    Columns = 2
+    Columns = 3,
+    Width = 760,
+    Height = 470
 })
 
 local Main = Window:Tab({
     Name = "Main",
-    Icon = "⌂",
-    Type = "List"
+    Icon = "house",
+    Type = "Grid"
 })
 
-local Camera = Main:Section({
-    Title = "Camera"
+--==================================================
+-- CHARACTER
+--==================================================
+
+local Character = Main:Section({Title = "Character", Column = 1})
+local WalkSpeedValue = 16
+local JumpPowerValue = 50
+local speedEnabled = false
+local jumpEnabled = false
+local speedConn
+local jumpConn
+
+local function getHumanoid()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function applyMovement()
+    local hum = getHumanoid()
+    if not hum then return end
+    if speedEnabled then hum.WalkSpeed = WalkSpeedValue end
+    if jumpEnabled then
+        if hum.UseJumpPower then hum.JumpPower = JumpPowerValue
+        else hum.JumpHeight = math.max(1, JumpPowerValue / 3) end
+    end
+end
+
+Character:Slider({
+    Name = "Walk Speed",
+    Min = 1,
+    Max = 250,
+    Step = 1,
+    Default = 16,
+    Flag = "JXU_WalkSpeed",
+    Callback = function(value)
+        WalkSpeedValue = value
+        speedEnabled = true
+        applyMovement()
+    end
 })
 
-local Misc = Window:Tab({
-    Name = "Misc",
-    Icon = "☷",
-    Type = "List"
+Character:Toggle({
+    Name = "Enable Walk Speed",
+    Default = false,
+    Flag = "JXU_WalkSpeedEnabled",
+    Callback = function(enabled)
+        speedEnabled = enabled
+        local hum = getHumanoid()
+        if hum then hum.WalkSpeed = enabled and WalkSpeedValue or 16 end
+    end
 })
 
-local MiscSection = Misc:Section({
-    Title = "Player List"
+Character:Slider({
+    Name = "Jump Power",
+    Min = 1,
+    Max = 250,
+    Step = 1,
+    Default = 50,
+    Flag = "JXU_JumpPower",
+    Callback = function(value)
+        JumpPowerValue = value
+        jumpEnabled = true
+        applyMovement()
+    end
 })
 
-local maxZoomValue = LocalPlayer.CameraMaxZoomDistance
-Camera:Slider({
+Character:Toggle({
+    Name = "Enable Jump Power",
+    Default = false,
+    Flag = "JXU_JumpPowerEnabled",
+    Callback = function(enabled)
+        jumpEnabled = enabled
+        local hum = getHumanoid()
+        if hum then
+            if hum.UseJumpPower then hum.JumpPower = enabled and JumpPowerValue or 50
+            else hum.JumpHeight = enabled and math.max(1, JumpPowerValue / 3) or 7.2 end
+        end
+    end
+})
+
+-- Fly uses Humanoid.MoveDirection, so the normal keyboard/thumbstick remains in use.
+local flyEnabled = false
+local flySpeed = 65
+local flyVelocity
+local flyGyro
+local flyAttachment
+local flyConn
+local oldAutoRotate
+local oldPlatformStand
+local oldAnimateDisabled
+local flyTracks = {}
+
+local function stopFly()
+    if flyConn then flyConn:Disconnect(); flyConn = nil end
+    if flyVelocity then flyVelocity:Destroy(); flyVelocity = nil end
+    if flyGyro then flyGyro:Destroy(); flyGyro = nil end
+    if flyAttachment then flyAttachment:Destroy(); flyAttachment = nil end
+
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if oldAutoRotate ~= nil then hum.AutoRotate = oldAutoRotate end
+        if oldPlatformStand ~= nil then hum.PlatformStand = oldPlatformStand end
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        for _, track in ipairs(flyTracks) do pcall(function() track:Stop(0.12) end) end
+    end
+    flyTracks = {}
+    local animate = char and char:FindFirstChild("Animate")
+    if animate and oldAnimateDisabled ~= nil then animate.Disabled = oldAnimateDisabled end
+    oldAutoRotate, oldPlatformStand, oldAnimateDisabled = nil, nil, nil
+end
+
+local function startFly()
+    stopFly()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+
+    oldAutoRotate = hum.AutoRotate
+    oldPlatformStand = hum.PlatformStand
+    hum.AutoRotate = false
+    hum.PlatformStand = false
+
+    local animate = char:FindFirstChild("Animate")
+    if animate then
+        oldAnimateDisabled = animate.Disabled
+        animate.Disabled = true
+    end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            table.insert(flyTracks, track)
+            pcall(function() track:Stop(0.1) end)
+        end
+    end
+
+    flyAttachment = Instance.new("Attachment")
+    flyAttachment.Name = "JXU_FlyAttachment"
+    flyAttachment.Parent = root
+
+    flyVelocity = Instance.new("LinearVelocity")
+    flyVelocity.Name = "JXU_FlyVelocity"
+    flyVelocity.Attachment0 = flyAttachment
+    flyVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    flyVelocity.MaxForce = math.huge
+    flyVelocity.VectorVelocity = Vector3.zero
+    flyVelocity.Parent = root
+
+    flyGyro = Instance.new("AlignOrientation")
+    flyGyro.Name = "JXU_FlyOrientation"
+    flyGyro.Attachment0 = flyAttachment
+    flyGyro.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    flyGyro.MaxTorque = math.huge
+    flyGyro.Responsiveness = 18
+    flyGyro.Parent = root
+
+    flyConn = RunService.RenderStepped:Connect(function()
+        if not flyEnabled or not root.Parent or not hum.Parent then return end
+        local camera = workspace.CurrentCamera
+        if not camera then return end
+
+        local move = hum.MoveDirection
+        local direction = Vector3.zero
+        if move.Magnitude > 0.05 then
+            direction = camera.CFrame:VectorToWorldSpace(Vector3.new(
+                move:Dot(camera.CFrame.RightVector),
+                0,
+                -move:Dot(camera.CFrame.LookVector)
+            ))
+            if direction.Magnitude > 0 then direction = direction.Unit end
+        end
+
+        local vertical = 0
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vertical += 1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then vertical -= 1 end
+
+        -- Mobile jump button gives a short upward lift; the normal thumbstick controls horizontal motion.
+        flyVelocity.VectorVelocity = direction * flySpeed + Vector3.new(0, vertical * flySpeed, 0)
+        local look = Vector3.new(camera.CFrame.LookVector.X, 0, camera.CFrame.LookVector.Z)
+        if look.Magnitude > 0.01 then
+            flyGyro.CFrame = CFrame.lookAt(root.Position, root.Position + look.Unit)
+        end
+    end)
+end
+
+Character:Slider({
+    Name = "Fly Speed",
+    Min = 10,
+    Max = 200,
+    Step = 1,
+    Default = 65,
+    Flag = "JXU_FlySpeed",
+    Callback = function(value) flySpeed = value end
+})
+
+Character:Toggle({
+    Name = "Fly",
+    Default = false,
+    Flag = "JXU_Fly",
+    Callback = function(enabled)
+        flyEnabled = enabled
+        if enabled then startFly() else stopFly() end
+    end
+})
+
+Character:Divider({Label = "Movement"})
+
+local noclipEnabled = false
+local noclipConn
+local collisionCache = {}
+
+local function restoreCollision()
+    for part, old in pairs(collisionCache) do
+        if part and part.Parent then part.CanCollide = old end
+    end
+    table.clear(collisionCache)
+end
+
+local function setNoclip(enabled)
+    noclipEnabled = enabled
+    if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
+    if not enabled then restoreCollision(); return end
+
+    noclipConn = RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if collisionCache[part] == nil then collisionCache[part] = part.CanCollide end
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+Character:Toggle({
+    Name = "Noclip",
+    Default = false,
+    Flag = "JXU_Noclip",
+    Callback = setNoclip
+})
+
+local infinityJump = false
+Character:Toggle({
+    Name = "Infinity Jump",
+    Default = false,
+    Flag = "JXU_InfinityJump",
+    Callback = function(enabled) infinityJump = enabled end
+})
+
+UserInputService.JumpRequest:Connect(function()
+    if not infinityJump then return end
+    local hum = getHumanoid()
+    if hum and hum.Health > 0 then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+local autoJumpOriginal
+Character:Toggle({
+    Name = "Disable Auto Jump",
+    Default = false,
+    Flag = "JXU_DisableAutoJump",
+    Callback = function(enabled)
+        local hum = getHumanoid()
+        if not hum then return end
+        if enabled then
+            if autoJumpOriginal == nil then autoJumpOriginal = hum.AutoJumpEnabled end
+            hum.AutoJumpEnabled = false
+        else
+            hum.AutoJumpEnabled = autoJumpOriginal ~= nil and autoJumpOriginal or true
+            autoJumpOriginal = nil
+        end
+    end
+})
+
+--==================================================
+-- VISUAL
+--==================================================
+
+local Visual = Main:Section({Title = "Visual", Column = 2})
+
+local fullbrightEnabled = false
+local fullbrightSnapshot
+local fullbrightConn
+local function setFullbright(enabled)
+    fullbrightEnabled = enabled
+    if fullbrightConn then fullbrightConn:Disconnect(); fullbrightConn = nil end
+    if enabled then
+        fullbrightSnapshot = {
+            Ambient = Lighting.Ambient,
+            OutdoorAmbient = Lighting.OutdoorAmbient,
+            Brightness = Lighting.Brightness,
+            GlobalShadows = Lighting.GlobalShadows
+        }
+        local function apply()
+            Lighting.Ambient = Color3.fromRGB(170, 170, 170)
+            Lighting.OutdoorAmbient = Color3.fromRGB(170, 170, 170)
+            Lighting.Brightness = 2
+            Lighting.GlobalShadows = false
+        end
+        apply()
+        fullbrightConn = RunService.Heartbeat:Connect(function()
+            if fullbrightEnabled then apply() end
+        end)
+    else
+        if fullbrightSnapshot then
+            Lighting.Ambient = fullbrightSnapshot.Ambient
+            Lighting.OutdoorAmbient = fullbrightSnapshot.OutdoorAmbient
+            Lighting.Brightness = fullbrightSnapshot.Brightness
+            Lighting.GlobalShadows = fullbrightSnapshot.GlobalShadows
+        end
+        fullbrightSnapshot = nil
+    end
+end
+
+Visual:Toggle({
+    Name = "Fullbright",
+    Default = false,
+    Flag = "JXU_Fullbright",
+    Callback = setFullbright
+})
+
+local fogEnabled = false
+local fogSnapshot
+local atmosphereSnapshots = {}
+local function setRemoveFog(enabled)
+    fogEnabled = enabled
+    if enabled then
+        fogSnapshot = {FogStart = Lighting.FogStart, FogEnd = Lighting.FogEnd}
+        table.clear(atmosphereSnapshots)
+        for _, obj in ipairs(Lighting:GetChildren()) do
+            if obj:IsA("Atmosphere") then
+                atmosphereSnapshots[obj] = {Density = obj.Density, Haze = obj.Haze, Glare = obj.Glare}
+            end
+        end
+        Lighting.FogStart = 0
+        Lighting.FogEnd = 1000000
+        for obj in pairs(atmosphereSnapshots) do
+            if obj.Parent then obj.Density = 0; obj.Haze = 0; obj.Glare = 0 end
+        end
+    else
+        if fogSnapshot then
+            Lighting.FogStart = fogSnapshot.FogStart
+            Lighting.FogEnd = fogSnapshot.FogEnd
+        end
+        for obj, values in pairs(atmosphereSnapshots) do
+            if obj.Parent then
+                obj.Density = values.Density
+                obj.Haze = values.Haze
+                obj.Glare = values.Glare
+            end
+        end
+        fogSnapshot = nil
+        table.clear(atmosphereSnapshots)
+    end
+end
+
+Visual:Toggle({
+    Name = "Remove Fog",
+    Default = false,
+    Flag = "JXU_RemoveFog",
+    Callback = setRemoveFog
+})
+
+local espEnabled = false
+local highlights = {}
+local characterConnections = {}
+
+local function removeHighlight(player)
+    local h = highlights[player]
+    if h then pcall(function() h:Destroy() end); highlights[player] = nil end
+end
+
+local function addHighlight(player, character)
+    removeHighlight(player)
+    if not espEnabled or player == LocalPlayer or not character then return end
+    local h = Instance.new("Highlight")
+    h.Name = "JXU_PlayerESP"
+    h.Adornee = character
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.FillTransparency = 1
+    h.OutlineTransparency = 0.05
+    h.OutlineColor = Color3.fromRGB(90, 175, 255)
+    h.Parent = character
+    highlights[player] = h
+end
+
+local function watchPlayer(player)
+    if characterConnections[player] then characterConnections[player]:Disconnect() end
+    characterConnections[player] = player.CharacterAdded:Connect(function(character)
+        task.wait(0.25)
+        addHighlight(player, character)
+    end)
+    if player.Character then addHighlight(player, player.Character) end
+end
+
+local function setESP(enabled)
+    espEnabled = enabled
+    if enabled then
+        for _, player in ipairs(Players:GetPlayers()) do watchPlayer(player) end
+    else
+        for player in pairs(highlights) do removeHighlight(player) end
+        for player, conn in pairs(characterConnections) do conn:Disconnect(); characterConnections[player] = nil end
+    end
+end
+
+Visual:Toggle({
+    Name = "ESP",
+    Default = false,
+    Flag = "JXU_ESP",
+    Callback = setESP
+})
+
+Players.PlayerAdded:Connect(function(player)
+    if espEnabled then watchPlayer(player) end
+end)
+Players.PlayerRemoving:Connect(function(player)
+    removeHighlight(player)
+    if characterConnections[player] then characterConnections[player]:Disconnect(); characterConnections[player] = nil end
+end)
+
+--==================================================
+-- MISC
+--==================================================
+
+local Misc = Main:Section({Title = "Misc", Column = 3})
+
+Misc:Slider({
     Name = "Max Zoom",
     Min = 1,
     Max = 10000,
     Step = 1,
-    Default = math.clamp(maxZoomValue, 1, 10000),
+    Default = math.clamp(LocalPlayer.CameraMaxZoomDistance, 1, 10000),
     Flag = "JXU_MaxZoom",
     Callback = function(value)
         LocalPlayer.CameraMaxZoomDistance = value
     end
 })
 
-LocalPlayer:GetPropertyChangedSignal("CameraMaxZoomDistance"):Connect(function()
-    maxZoomValue = LocalPlayer.CameraMaxZoomDistance
-end)
-
--- Custom leaderboard
+-- Custom leaderboard. Roblox does not expose other players' Backpack contents
+-- to ordinary clients; only visible/equipped tools can be listed reliably.
 local leaderboardEnabled = false
 local leaderboardGui
-local playerConnections = {}
-local rowByPlayer = {}
-local expandedByPlayer = {}
-local refreshQueued = false
+local expanded = {}
+local playerWatchers = {}
+local refreshPending = false
+local oldPlayerListEnabled = true
 
-local COLORS = {
-    background = Color3.fromRGB(20, 22, 29),
-    row = Color3.fromRGB(30, 33, 43),
-    rowHover = Color3.fromRGB(39, 43, 56),
+local LB = {
+    bg = Color3.fromRGB(22, 24, 31),
+    row = Color3.fromRGB(34, 37, 47),
     text = Color3.fromRGB(240, 242, 248),
-    muted = Color3.fromRGB(153, 160, 177),
-    accent = Color3.fromRGB(120, 155, 255),
-    border = Color3.fromRGB(66, 72, 91),
+    muted = Color3.fromRGB(155, 163, 180),
+    accent = Color3.fromRGB(105, 150, 255),
+    border = Color3.fromRGB(65, 72, 91)
 }
 
-local function make(className, props, parent)
+local function newGui(className, props, parent)
     local obj = Instance.new(className)
-    for key, value in pairs(props or {}) do
-        obj[key] = value
-    end
+    for k, v in pairs(props or {}) do obj[k] = v end
     obj.Parent = parent
     return obj
 end
 
-local function round(instance, radius)
-    make("UICorner", {CornerRadius = UDim.new(0, radius or 8)}, instance)
+local function roundGui(obj, radius)
+    newGui("UICorner", {CornerRadius = UDim.new(0, radius)}, obj)
 end
 
-local function addStroke(instance)
-    make("UIStroke", {
-        Color = COLORS.border,
-        Thickness = 1,
-        Transparency = 0.35,
-    }, instance)
-end
-
-local function getHeldTools(player)
-    local result = {}
+local function getPlayerItems(player)
+    local held, backpack = {}, {}
     local character = player.Character
     if character then
-        for _, child in ipairs(character:GetChildren()) do
-            if child:IsA("Tool") then
-                table.insert(result, child.Name)
-            end
+        for _, item in ipairs(character:GetChildren()) do
+            if item:IsA("Tool") then table.insert(held, item.Name) end
         end
     end
-    table.sort(result)
-    return result
-end
-
-local function inventoryText(player)
-    local held = getHeldTools(player)
-    local lines = {}
-
-    if #held == 0 then
-        table.insert(lines, "In hand: nothing")
-    else
-        table.insert(lines, "In hand: " .. table.concat(held, ", "))
-    end
-
-    -- Backpack contents of other players are not replicated to this client in normal Roblox.
-    table.insert(lines, "Backpack: unavailable (not replicated by Roblox)")
-    return table.concat(lines, "\n")
-end
-
-local function clearRows()
-    for player, row in pairs(rowByPlayer) do
-        if row and row.Parent then
-            row:Destroy()
+    local pack = player:FindFirstChildOfClass("Backpack")
+    if pack then
+        for _, item in ipairs(pack:GetChildren()) do
+            if item:IsA("Tool") then table.insert(backpack, item.Name) end
         end
-        rowByPlayer[player] = nil
     end
+    table.sort(held)
+    table.sort(backpack)
+    return held, backpack, pack ~= nil
 end
 
-local function buildPlayerRow(player, order)
-    local rowHeight = expandedByPlayer[player] and 84 or 42
-    local row = make("Frame", {
-        Name = "Player_" .. player.UserId,
-        Size = UDim2.new(1, -8, 0, rowHeight),
-        BackgroundColor3 = COLORS.row,
-        BorderSizePixel = 0,
-        LayoutOrder = order,
-    }, leaderboardGui.List)
-    round(row, 8)
-
-    local click = make("TextButton", {
-        Name = "Header",
-        Size = UDim2.new(1, 0, 0, 42),
-        BackgroundTransparency = 1,
-        Text = "",
-        AutoButtonColor = false,
-    }, row)
-
-    local avatar = make("ImageLabel", {
-        Name = "Avatar",
-        Position = UDim2.new(0, 7, 0, 6),
-        Size = UDim2.new(0, 30, 0, 30),
-        BackgroundColor3 = COLORS.background,
-        BorderSizePixel = 0,
-        Image = "",
-    }, click)
-    round(avatar, 15)
-
-    task.spawn(function()
-        local success, image = pcall(function()
-            return Players:GetUserThumbnailAsync(
-                player.UserId,
-                Enum.ThumbnailType.HeadShot,
-                Enum.ThumbnailSize.Size48x48
-            )
-        end)
-        if success and avatar.Parent then
-            avatar.Image = image
-        end
-    end)
-
-    make("TextLabel", {
-        Name = "DisplayName",
-        Position = UDim2.new(0, 44, 0, 4),
-        Size = UDim2.new(1, -76, 0, 17),
-        BackgroundTransparency = 1,
-        Font = Enum.Font.GothamSemibold,
-        TextSize = 12,
-        TextColor3 = COLORS.text,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextTruncate = Enum.TextTruncate.AtEnd,
-        Text = player.DisplayName,
-    }, click)
-
-    make("TextLabel", {
-        Name = "Username",
-        Position = UDim2.new(0, 44, 0, 20),
-        Size = UDim2.new(1, -76, 0, 15),
-        BackgroundTransparency = 1,
-        Font = Enum.Font.Gotham,
-        TextSize = 10,
-        TextColor3 = COLORS.muted,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextTruncate = Enum.TextTruncate.AtEnd,
-        Text = "@" .. player.Name,
-    }, click)
-
-    make("TextLabel", {
-        Name = "Arrow",
-        AnchorPoint = Vector2.new(1, 0.5),
-        Position = UDim2.new(1, -12, 0, 21),
-        Size = UDim2.new(0, 18, 0, 18),
-        BackgroundTransparency = 1,
-        Font = Enum.Font.GothamBold,
-        TextSize = 14,
-        TextColor3 = COLORS.muted,
-        Text = expandedByPlayer[player] and "⌃" or "⌄",
-    }, click)
-
-    click.MouseButton1Click:Connect(function()
-        expandedByPlayer[player] = not expandedByPlayer[player]
-        refreshLeaderboard()
-    end)
-
-    if expandedByPlayer[player] then
-        make("TextLabel", {
-            Name = "Inventory",
-            Position = UDim2.new(0, 10, 0, 44),
-            Size = UDim2.new(1, -20, 0, 34),
-            BackgroundTransparency = 1,
-            Font = Enum.Font.Gotham,
-            TextSize = 10,
-            TextColor3 = COLORS.muted,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            TextYAlignment = Enum.TextYAlignment.Top,
-            TextWrapped = true,
-            Text = inventoryText(player),
-        }, row)
-    end
-
-    rowByPlayer[player] = row
-end
-
-local function refreshLeaderboard()
-    if not leaderboardEnabled or not leaderboardGui then
-        return
-    end
-
-    clearRows()
-    local list = Players:GetPlayers()
-    table.sort(list, function(a, b)
-        if a == LocalPlayer then return true end
-        if b == LocalPlayer then return false end
-        return string.lower(a.Name) < string.lower(b.Name)
-    end)
-
-    for index, player in ipairs(list) do
-        buildPlayerRow(player, index)
-    end
-
-    local layout = leaderboardGui.List:FindFirstChildOfClass("UIListLayout")
-    if layout then
-        leaderboardGui.List.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 8)
-    end
-end
-
-local function queueRefresh()
-    if refreshQueued then return end
-    refreshQueued = true
+local function scheduleLeaderboardRefresh()
+    if refreshPending then return end
+    refreshPending = true
     task.defer(function()
-        refreshQueued = false
-        refreshLeaderboard()
+        refreshPending = false
+        if leaderboardEnabled and leaderboardGui and leaderboardGui.Parent then
+            -- Rebuild only the rows; keep the panel and scrolling state alive.
+            local list = leaderboardGui:FindFirstChild("PlayerRows")
+            if not list then return end
+            for _, child in ipairs(list:GetChildren()) do
+                if child:IsA("Frame") then child:Destroy() end
+            end
+
+            local players = Players:GetPlayers()
+            table.sort(players, function(a, b)
+                if a == LocalPlayer then return true end
+                if b == LocalPlayer then return false end
+                return a.Name:lower() < b.Name:lower()
+            end)
+
+            for index, player in ipairs(players) do
+                local isOpen = expanded[player] == true
+                local held, backpack, hasBackpack = getPlayerItems(player)
+                local rowHeight = isOpen and 92 or 44
+                local row = newGui("Frame", {
+                    Name = "Row_" .. player.UserId,
+                    Size = UDim2.new(1, -8, 0, rowHeight),
+                    BackgroundColor3 = LB.row,
+                    BorderSizePixel = 0,
+                    LayoutOrder = index
+                }, list)
+                roundGui(row, 8)
+
+                local header = newGui("TextButton", {
+                    Name = "Header",
+                    Size = UDim2.new(1, 0, 0, 44),
+                    BackgroundTransparency = 1,
+                    Text = "",
+                    AutoButtonColor = false
+                }, row)
+
+                local avatar = newGui("ImageLabel", {
+                    Size = UDim2.new(0, 32, 0, 32),
+                    Position = UDim2.new(0, 7, 0, 6),
+                    BackgroundColor3 = LB.bg,
+                    BorderSizePixel = 0
+                }, header)
+                roundGui(avatar, 16)
+                task.spawn(function()
+                    local okThumb, image = pcall(function()
+                        return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+                    end)
+                    if okThumb and avatar.Parent then avatar.Image = image end
+                end)
+
+                newGui("TextLabel", {
+                    Position = UDim2.new(0, 47, 0, 5),
+                    Size = UDim2.new(1, -78, 0, 17),
+                    BackgroundTransparency = 1,
+                    Font = Enum.Font.GothamSemibold,
+                    TextSize = 12,
+                    TextColor3 = LB.text,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    Text = player.DisplayName
+                }, header)
+                newGui("TextLabel", {
+                    Position = UDim2.new(0, 47, 0, 21),
+                    Size = UDim2.new(1, -78, 0, 14),
+                    BackgroundTransparency = 1,
+                    Font = Enum.Font.Gotham,
+                    TextSize = 10,
+                    TextColor3 = LB.muted,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    Text = "@" .. player.Name
+                }, header)
+                newGui("TextLabel", {
+                    AnchorPoint = Vector2.new(1, 0.5),
+                    Position = UDim2.new(1, -10, 0, 22),
+                    Size = UDim2.new(0, 18, 0, 18),
+                    BackgroundTransparency = 1,
+                    Font = Enum.Font.GothamBold,
+                    TextSize = 14,
+                    TextColor3 = LB.muted,
+                    Text = isOpen and "⌃" or "⌄"
+                }, header)
+
+                header.MouseButton1Click:Connect(function()
+                    expanded[player] = not expanded[player]
+                    scheduleLeaderboardRefresh()
+                end)
+
+                if isOpen then
+                    local heldText = #held > 0 and table.concat(held, ", ") or "Nothing"
+                    local backpackText
+                    if hasBackpack then
+                        backpackText = #backpack > 0 and table.concat(backpack, ", ") or "Empty"
+                    else
+                        backpackText = "Not replicated to this client"
+                    end
+                    newGui("TextLabel", {
+                        Position = UDim2.new(0, 10, 0, 47),
+                        Size = UDim2.new(1, -20, 0, 39),
+                        BackgroundTransparency = 1,
+                        Font = Enum.Font.Gotham,
+                        TextSize = 10,
+                        TextColor3 = LB.muted,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                        TextYAlignment = Enum.TextYAlignment.Top,
+                        TextWrapped = true,
+                        Text = "Equipped: " .. heldText .. "\nBackpack: " .. backpackText
+                    }, row)
+                end
+            end
+            list.CanvasSize = UDim2.new(0, 0, 0, #players * 48 + 8)
+        end
     end)
+end
+
+local function watchLeaderboardPlayer(player)
+    if playerWatchers[player] then
+        for _, conn in ipairs(playerWatchers[player]) do conn:Disconnect() end
+    end
+    local connections = {}
+    playerWatchers[player] = connections
+    local function watchCharacter(character)
+        table.insert(connections, character.ChildAdded:Connect(scheduleLeaderboardRefresh))
+        table.insert(connections, character.ChildRemoved:Connect(scheduleLeaderboardRefresh))
+        scheduleLeaderboardRefresh()
+    end
+    table.insert(connections, player.CharacterAdded:Connect(watchCharacter))
+    table.insert(connections, player.CharacterRemoving:Connect(scheduleLeaderboardRefresh))
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    if backpack then
+        table.insert(connections, backpack.ChildAdded:Connect(scheduleLeaderboardRefresh))
+        table.insert(connections, backpack.ChildRemoved:Connect(scheduleLeaderboardRefresh))
+    end
+    if player.Character then watchCharacter(player.Character) end
 end
 
 local function destroyLeaderboard()
-    if leaderboardGui then
-        leaderboardGui:Destroy()
-        leaderboardGui = nil
+    if leaderboardGui then leaderboardGui:Destroy(); leaderboardGui = nil end
+    for player, connections in pairs(playerWatchers) do
+        for _, conn in ipairs(connections) do conn:Disconnect() end
+        playerWatchers[player] = nil
     end
-    clearRows()
-    rowByPlayer = {}
+    table.clear(expanded)
 end
 
 local function createLeaderboard()
     destroyLeaderboard()
-
-    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-    leaderboardGui = make("ScreenGui", {
+    leaderboardGui = newGui("ScreenGui", {
         Name = "JustXCustomLeaderboard",
         ResetOnSpawn = false,
         IgnoreGuiInset = false,
-        DisplayOrder = 20,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    }, playerGui)
+        DisplayOrder = 50,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    }, LocalPlayer:WaitForChild("PlayerGui"))
 
-    local panel = make("Frame", {
+    local panel = newGui("Frame", {
         Name = "Panel",
         AnchorPoint = Vector2.new(1, 0),
-        Position = UDim2.new(1, -10, 0, 42),
-        Size = UDim2.new(0, 218, 0, 270),
-        BackgroundColor3 = COLORS.background,
-        BackgroundTransparency = 0.08,
-        BorderSizePixel = 0,
+        Position = UDim2.new(1, -12, 0, 48),
+        Size = UDim2.new(0, 238, 0, 300),
+        BackgroundColor3 = LB.bg,
+        BackgroundTransparency = 0.04,
+        BorderSizePixel = 0
     }, leaderboardGui)
-    round(panel, 10)
-    addStroke(panel)
+    roundGui(panel, 10)
+    newGui("UIStroke", {Color = LB.border, Thickness = 1, Transparency = 0.25}, panel)
 
-    make("TextLabel", {
-        Name = "Title",
+    local title = newGui("TextLabel", {
         Position = UDim2.new(0, 12, 0, 0),
-        Size = UDim2.new(1, -24, 0, 34),
+        Size = UDim2.new(1, -24, 0, 36),
         BackgroundTransparency = 1,
         Font = Enum.Font.GothamBold,
         TextSize = 12,
-        TextColor3 = COLORS.text,
+        TextColor3 = LB.text,
         TextXAlignment = Enum.TextXAlignment.Left,
-        Text = "PLAYERS",
+        Text = "PLAYERS"
     }, panel)
 
-    local list = make("ScrollingFrame", {
-        Name = "List",
-        Position = UDim2.new(0, 4, 0, 36),
-        Size = UDim2.new(1, -8, 1, -42),
+    local list = newGui("ScrollingFrame", {
+        Name = "PlayerRows",
+        Position = UDim2.new(0, 4, 0, 38),
+        Size = UDim2.new(1, -8, 1, -44),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         ScrollBarThickness = 3,
-        ScrollBarImageColor3 = COLORS.accent,
+        ScrollBarImageColor3 = LB.accent,
         CanvasSize = UDim2.new(0, 0, 0, 0),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y
     }, panel)
-
-    make("UIListLayout", {
+    newGui("UIListLayout", {
         Padding = UDim.new(0, 4),
-        SortOrder = Enum.SortOrder.LayoutOrder,
+        SortOrder = Enum.SortOrder.LayoutOrder
     }, list)
-
-    make("UIPadding", {
+    newGui("UIPadding", {
         PaddingLeft = UDim.new(0, 2),
         PaddingRight = UDim.new(0, 2),
-        PaddingBottom = UDim.new(0, 4),
+        PaddingBottom = UDim.new(0, 4)
     }, list)
 
-    refreshLeaderboard()
+    -- Drag the panel by its title area (works with mouse and touch).
+    local dragging, dragStart, startPos
+    title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = panel.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+    end)
+
+    for _, player in ipairs(Players:GetPlayers()) do watchLeaderboardPlayer(player) end
+    scheduleLeaderboardRefresh()
 end
 
-local function setLeaderboardEnabled(enabled)
+local function setLeaderboard(enabled)
     leaderboardEnabled = enabled
-
     if enabled then
         pcall(function()
             StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
@@ -361,24 +759,44 @@ local function setLeaderboardEnabled(enabled)
     end
 end
 
-MiscSection:Toggle({
+Misc:Toggle({
     Name = "Custom Leaderboard",
     Default = false,
     Flag = "JXU_CustomLeaderboard",
-    Callback = function(enabled)
-        setLeaderboardEnabled(enabled)
-    end
+    Callback = setLeaderboard
 })
 
-Players.PlayerAdded:Connect(queueRefresh)
-Players.PlayerRemoving:Connect(function(player)
-    expandedByPlayer[player] = nil
-    queueRefresh()
+Players.PlayerAdded:Connect(function(player)
+    if espEnabled then watchPlayer(player) end
+    if leaderboardEnabled then watchLeaderboardPlayer(player); scheduleLeaderboardRefresh() end
 end)
 
-for _, player in ipairs(Players:GetPlayers()) do
-    player.CharacterAdded:Connect(queueRefresh)
-    player.CharacterRemoving:Connect(queueRefresh)
-end
+Players.PlayerRemoving:Connect(function(player)
+    expanded[player] = nil
+    removeHighlight(player)
+    if characterConnections[player] then characterConnections[player]:Disconnect(); characterConnections[player] = nil end
+    if playerWatchers[player] then
+        for _, conn in ipairs(playerWatchers[player]) do conn:Disconnect() end
+        playerWatchers[player] = nil
+    end
+    scheduleLeaderboardRefresh()
+end)
 
-print("[Just X Universal] Loaded: Max Zoom + Custom Leaderboard")
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.2)
+    applyMovement()
+    if flyEnabled then startFly() end
+    if noclipEnabled then setNoclip(true) end
+    if autoJumpOriginal ~= nil then
+        local hum = getHumanoid()
+        if hum then hum.AutoJumpEnabled = false end
+    end
+end)
+
+LocalPlayer.CharacterRemoving:Connect(function()
+    if flyEnabled then stopFly() end
+    if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
+    restoreCollision()
+end)
+
+print("[Just X Universal] Loaded with JustLib: Character / Visual / Misc")
