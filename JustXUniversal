@@ -533,121 +533,149 @@ local function getPlayerItems(player)
     return held, backpack, pack ~= nil
 end
 
-local function scheduleLeaderboardRefresh()
-    if refreshPending then return end
-    refreshPending = true
-    task.defer(function()
-        refreshPending = false
-        if leaderboardEnabled and leaderboardGui and leaderboardGui.Parent then
-            -- Rebuild only the rows; keep the panel and scrolling state alive.
-            local list = leaderboardGui:FindFirstChild("PlayerRows")
-            if not list then return end
-            for _, child in ipairs(list:GetChildren()) do
-                if child:IsA("Frame") then child:Destroy() end
-            end
+local function renderLeaderboard()
+    if not leaderboardEnabled or not leaderboardGui or not leaderboardGui.Parent then return end
+    local list = leaderboardGui:FindFirstChild("PlayerRows")
+    if not list then return end
 
-            local players = Players:GetPlayers()
-            table.sort(players, function(a, b)
-                if a == LocalPlayer then return true end
-                if b == LocalPlayer then return false end
-                return a.Name:lower() < b.Name:lower()
+    for _, child in ipairs(list:GetChildren()) do
+        if child:IsA("Frame") or child:IsA("TextLabel") then
+            child:Destroy()
+        end
+    end
+
+    local players = Players:GetPlayers()
+    table.sort(players, function(a, b)
+        if a == LocalPlayer then return b ~= LocalPlayer end
+        if b == LocalPlayer then return false end
+        return a.Name:lower() < b.Name:lower()
+    end)
+
+    if #players == 0 then
+        newGui("TextLabel", {
+            Name = "EmptyState",
+            Size = UDim2.new(1, -8, 0, 36),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.Gotham,
+            TextSize = 11,
+            TextColor3 = LB.muted,
+            Text = "No players found",
+            LayoutOrder = 1
+        }, list)
+    end
+
+    for index, player in ipairs(players) do
+        local okRow, rowError = pcall(function()
+            local isOpen = expanded[player] == true
+            local held, backpack, hasBackpack = getPlayerItems(player)
+            local row = newGui("Frame", {
+                Name = "Row_" .. player.UserId,
+                Size = UDim2.new(1, -8, 0, isOpen and 92 or 44),
+                BackgroundColor3 = LB.row,
+                BorderSizePixel = 0,
+                LayoutOrder = index
+            }, list)
+            roundGui(row, 8)
+
+            local header = newGui("TextButton", {
+                Name = "Header",
+                Size = UDim2.new(1, 0, 0, 44),
+                BackgroundTransparency = 1,
+                Text = "",
+                AutoButtonColor = false
+            }, row)
+
+            local avatar = newGui("ImageLabel", {
+                Size = UDim2.new(0, 32, 0, 32),
+                Position = UDim2.new(0, 7, 0, 6),
+                BackgroundColor3 = LB.bg,
+                BorderSizePixel = 0
+            }, header)
+            roundGui(avatar, 16)
+            task.spawn(function()
+                local okThumb, image = pcall(function()
+                    return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+                end)
+                if okThumb and avatar.Parent then avatar.Image = image end
             end)
 
-            for index, player in ipairs(players) do
-                local isOpen = expanded[player] == true
-                local held, backpack, hasBackpack = getPlayerItems(player)
-                local rowHeight = isOpen and 92 or 44
-                local row = newGui("Frame", {
-                    Name = "Row_" .. player.UserId,
-                    Size = UDim2.new(1, -8, 0, rowHeight),
-                    BackgroundColor3 = LB.row,
-                    BorderSizePixel = 0,
-                    LayoutOrder = index
-                }, list)
-                roundGui(row, 8)
+            newGui("TextLabel", {
+                Position = UDim2.new(0, 47, 0, 5),
+                Size = UDim2.new(1, -78, 0, 17),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamSemibold,
+                TextSize = 12,
+                TextColor3 = LB.text,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                Text = player.DisplayName
+            }, header)
+            newGui("TextLabel", {
+                Position = UDim2.new(0, 47, 0, 21),
+                Size = UDim2.new(1, -78, 0, 14),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.Gotham,
+                TextSize = 10,
+                TextColor3 = LB.muted,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                Text = "@" .. player.Name
+            }, header)
+            newGui("TextLabel", {
+                AnchorPoint = Vector2.new(1, 0.5),
+                Position = UDim2.new(1, -10, 0, 22),
+                Size = UDim2.new(0, 18, 0, 18),
+                BackgroundTransparency = 1,
+                Font = Enum.Font.GothamBold,
+                TextSize = 14,
+                TextColor3 = LB.muted,
+                Text = isOpen and "⌃" or "⌄"
+            }, header)
 
-                local header = newGui("TextButton", {
-                    Name = "Header",
-                    Size = UDim2.new(1, 0, 0, 44),
-                    BackgroundTransparency = 1,
-                    Text = "",
-                    AutoButtonColor = false
-                }, row)
+            header.MouseButton1Click:Connect(function()
+                expanded[player] = not expanded[player]
+                scheduleLeaderboardRefresh()
+            end)
 
-                local avatar = newGui("ImageLabel", {
-                    Size = UDim2.new(0, 32, 0, 32),
-                    Position = UDim2.new(0, 7, 0, 6),
-                    BackgroundColor3 = LB.bg,
-                    BorderSizePixel = 0
-                }, header)
-                roundGui(avatar, 16)
-                task.spawn(function()
-                    local okThumb, image = pcall(function()
-                        return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
-                    end)
-                    if okThumb and avatar.Parent then avatar.Image = image end
-                end)
-
+            if isOpen then
+                local heldText = #held > 0 and table.concat(held, ", ") or "Nothing"
+                local backpackText = hasBackpack and (#backpack > 0 and table.concat(backpack, ", ") or "Empty") or "Not replicated to this client"
                 newGui("TextLabel", {
-                    Position = UDim2.new(0, 47, 0, 5),
-                    Size = UDim2.new(1, -78, 0, 17),
-                    BackgroundTransparency = 1,
-                    Font = Enum.Font.GothamSemibold,
-                    TextSize = 12,
-                    TextColor3 = LB.text,
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    TextTruncate = Enum.TextTruncate.AtEnd,
-                    Text = player.DisplayName
-                }, header)
-                newGui("TextLabel", {
-                    Position = UDim2.new(0, 47, 0, 21),
-                    Size = UDim2.new(1, -78, 0, 14),
+                    Position = UDim2.new(0, 10, 0, 47),
+                    Size = UDim2.new(1, -20, 0, 39),
                     BackgroundTransparency = 1,
                     Font = Enum.Font.Gotham,
                     TextSize = 10,
                     TextColor3 = LB.muted,
                     TextXAlignment = Enum.TextXAlignment.Left,
-                    Text = "@" .. player.Name
-                }, header)
-                newGui("TextLabel", {
-                    AnchorPoint = Vector2.new(1, 0.5),
-                    Position = UDim2.new(1, -10, 0, 22),
-                    Size = UDim2.new(0, 18, 0, 18),
-                    BackgroundTransparency = 1,
-                    Font = Enum.Font.GothamBold,
-                    TextSize = 14,
-                    TextColor3 = LB.muted,
-                    Text = isOpen and "⌃" or "⌄"
-                }, header)
-
-                header.MouseButton1Click:Connect(function()
-                    expanded[player] = not expanded[player]
-                    scheduleLeaderboardRefresh()
-                end)
-
-                if isOpen then
-                    local heldText = #held > 0 and table.concat(held, ", ") or "Nothing"
-                    local backpackText
-                    if hasBackpack then
-                        backpackText = #backpack > 0 and table.concat(backpack, ", ") or "Empty"
-                    else
-                        backpackText = "Not replicated to this client"
-                    end
-                    newGui("TextLabel", {
-                        Position = UDim2.new(0, 10, 0, 47),
-                        Size = UDim2.new(1, -20, 0, 39),
-                        BackgroundTransparency = 1,
-                        Font = Enum.Font.Gotham,
-                        TextSize = 10,
-                        TextColor3 = LB.muted,
-                        TextXAlignment = Enum.TextXAlignment.Left,
-                        TextYAlignment = Enum.TextYAlignment.Top,
-                        TextWrapped = true,
-                        Text = "Equipped: " .. heldText .. "\nBackpack: " .. backpackText
-                    }, row)
-                end
+                    TextYAlignment = Enum.TextYAlignment.Top,
+                    TextWrapped = true,
+                    Text = "Equipped: " .. heldText .. "\\nBackpack: " .. backpackText
+                }, row)
             end
-            list.CanvasSize = UDim2.new(0, 0, 0, #players * 48 + 8)
+        end)
+        if not okRow then
+            warn("[Just X Universal] Leaderboard row error:", player.Name, rowError)
+        end
+    end
+
+    task.defer(function()
+        if list.Parent then
+            local layout = list:FindFirstChildOfClass("UIListLayout")
+            if layout then
+                list.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 8)
+            end
+        end
+    end)
+end
+
+local function scheduleLeaderboardRefresh()
+    if refreshPending then return end
+    refreshPending = true
+    task.defer(function()
+        refreshPending = false
+        local okRender, renderError = pcall(renderLeaderboard)
+        if not okRender then
+            warn("[Just X Universal] Leaderboard refresh failed:", renderError)
         end
     end)
 end
