@@ -67,8 +67,7 @@ Character:Slider({
     Flag = "JXU_WalkSpeed",
     Callback = function(value)
         WalkSpeedValue = value
-        speedEnabled = true
-        applyMovement()
+        if speedEnabled then applyMovement() end
     end
 })
 
@@ -79,7 +78,16 @@ Character:Toggle({
     Callback = function(enabled)
         speedEnabled = enabled
         local hum = getHumanoid()
-        if hum then hum.WalkSpeed = enabled and WalkSpeedValue or 16 end
+        if hum then
+            if enabled then
+                if movementOriginals.Humanoid ~= hum then
+                    movementOriginals = {Humanoid = hum, WalkSpeed = hum.WalkSpeed, JumpPower = hum.JumpPower, JumpHeight = hum.JumpHeight}
+                end
+                hum.WalkSpeed = WalkSpeedValue
+            elseif movementOriginals.Humanoid == hum then
+                hum.WalkSpeed = movementOriginals.WalkSpeed or 16
+            end
+        end
     end
 })
 
@@ -92,8 +100,7 @@ Character:Slider({
     Flag = "JXU_JumpPower",
     Callback = function(value)
         JumpPowerValue = value
-        jumpEnabled = true
-        applyMovement()
+        if jumpEnabled then applyMovement() end
     end
 })
 
@@ -105,8 +112,16 @@ Character:Toggle({
         jumpEnabled = enabled
         local hum = getHumanoid()
         if hum then
-            if hum.UseJumpPower then hum.JumpPower = enabled and JumpPowerValue or 50
-            else hum.JumpHeight = enabled and math.max(1, JumpPowerValue / 3) or 7.2 end
+            if movementOriginals.Humanoid ~= hum then
+                movementOriginals = {Humanoid = hum, WalkSpeed = hum.WalkSpeed, JumpPower = hum.JumpPower, JumpHeight = hum.JumpHeight}
+            end
+            if enabled then
+                if hum.UseJumpPower then hum.JumpPower = JumpPowerValue
+                else hum.JumpHeight = math.max(1, JumpPowerValue / 3) end
+            else
+                hum.JumpPower = movementOriginals.JumpPower or 50
+                hum.JumpHeight = movementOriginals.JumpHeight or 7.2
+            end
         end
     end
 })
