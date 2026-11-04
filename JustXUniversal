@@ -623,7 +623,7 @@ local function renderLeaderboard()
     for index, player in ipairs(players) do
         local row = Instance.new("Frame")
         row.Name = "Player_" .. tostring(player.UserId)
-        row.Size = UDim2.new(1, -6, 0, expanded[player] and 86 or 48)
+        row.Size = UDim2.new(1, -6, 0, expanded[player] and 70 or 39)
         row.BackgroundColor3 = LB.row
         row.BorderSizePixel = 0
         row.LayoutOrder = index
@@ -632,15 +632,15 @@ local function renderLeaderboard()
 
         local header = Instance.new("TextButton")
         header.Name = "Header"
-        header.Size = UDim2.new(1, 0, 0, 46)
+        header.Size = UDim2.new(1, 0, 0, 38)
         header.BackgroundTransparency = 1
         header.Text = ""
         header.AutoButtonColor = false
         header.Parent = row
 
         local avatar = Instance.new("ImageLabel")
-        avatar.Size = UDim2.fromOffset(34, 34)
-        avatar.Position = UDim2.fromOffset(7, 6)
+        avatar.Size = UDim2.fromOffset(27, 27)
+        avatar.Position = UDim2.fromOffset(6, 5)
         avatar.BackgroundColor3 = LB.bg
         avatar.BorderSizePixel = 0
         avatar.Parent = header
@@ -652,11 +652,11 @@ local function renderLeaderboard()
         end)
 
         local name = Instance.new("TextLabel")
-        name.Position = UDim2.fromOffset(49, 5)
-        name.Size = UDim2.new(1, -78, 0, 18)
+        name.Position = UDim2.fromOffset(40, 3)
+        name.Size = UDim2.new(1, -66, 0, 16)
         name.BackgroundTransparency = 1
         name.Font = Enum.Font.GothamSemibold
-        name.TextSize = 12
+        name.TextSize = 11
         name.TextColor3 = LB.text
         name.TextXAlignment = Enum.TextXAlignment.Left
         name.TextTruncate = Enum.TextTruncate.AtEnd
@@ -664,11 +664,11 @@ local function renderLeaderboard()
         name.Parent = header
 
         local username = Instance.new("TextLabel")
-        username.Position = UDim2.fromOffset(49, 22)
-        username.Size = UDim2.new(1, -78, 0, 15)
+        username.Position = UDim2.fromOffset(40, 19)
+        username.Size = UDim2.new(1, -66, 0, 13)
         username.BackgroundTransparency = 1
         username.Font = Enum.Font.Gotham
-        username.TextSize = 10
+        username.TextSize = 9
         username.TextColor3 = LB.muted
         username.TextXAlignment = Enum.TextXAlignment.Left
         username.Text = "@" .. player.Name
@@ -676,7 +676,7 @@ local function renderLeaderboard()
 
         local arrow = Instance.new("TextLabel")
         arrow.AnchorPoint = Vector2.new(1, 0.5)
-        arrow.Position = UDim2.new(1, -9, 0, 23)
+        arrow.Position = UDim2.new(1, -7, 0, 19)
         arrow.Size = UDim2.fromOffset(18, 18)
         arrow.BackgroundTransparency = 1
         arrow.Font = Enum.Font.GothamBold
@@ -693,11 +693,11 @@ local function renderLeaderboard()
         if expanded[player] then
             local held, backpack, hasBackpack = getPlayerItems(player)
             local detail = Instance.new("TextLabel")
-            detail.Position = UDim2.fromOffset(10, 49)
-            detail.Size = UDim2.new(1, -20, 0, 32)
+            detail.Position = UDim2.fromOffset(9, 40)
+            detail.Size = UDim2.new(1, -18, 0, 27)
             detail.BackgroundTransparency = 1
             detail.Font = Enum.Font.Gotham
-            detail.TextSize = 10
+            detail.TextSize = 9
             detail.TextColor3 = LB.muted
             detail.TextXAlignment = Enum.TextXAlignment.Left
             detail.TextYAlignment = Enum.TextYAlignment.Top
@@ -778,7 +778,7 @@ local function createLeaderboard()
     panel.Name = "Panel"
     panel.AnchorPoint = Vector2.new(1, 0)
     panel.Position = UDim2.new(1, -12, 0, 48)
-    panel.Size = UDim2.fromOffset(250, 310)
+    panel.Size = UDim2.fromOffset(208, 228)
     panel.BackgroundColor3 = LB.bg
     panel.BackgroundTransparency = 0.04
     panel.BorderSizePixel = 0
@@ -791,20 +791,35 @@ local function createLeaderboard()
     stroke.Parent = panel
 
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -20, 0, 36)
+    title.Size = UDim2.new(1, -48, 0, 30)
     title.Position = UDim2.fromOffset(10, 0)
     title.BackgroundTransparency = 1
     title.Font = Enum.Font.GothamBold
-    title.TextSize = 12
+    title.TextSize = 11
     title.TextColor3 = LB.text
     title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Text = "PLAYERS  •  " .. tostring(#Players:GetPlayers())
+    title.Text = "PLAYERS  ·  " .. tostring(#Players:GetPlayers())
     title.Parent = panel
+
+    local collapse = Instance.new("TextButton")
+    collapse.Name = "Collapse"
+    collapse.AnchorPoint = Vector2.new(1, 0.5)
+    collapse.Position = UDim2.new(1, -8, 0, 15)
+    collapse.Size = UDim2.fromOffset(24, 22)
+    collapse.BackgroundColor3 = LB.row
+    collapse.BackgroundTransparency = 0.15
+    collapse.BorderSizePixel = 0
+    collapse.Font = Enum.Font.GothamBold
+    collapse.TextSize = 13
+    collapse.TextColor3 = LB.muted
+    collapse.Text = "−"
+    collapse.Parent = panel
+    Instance.new("UICorner", collapse).CornerRadius = UDim.new(0, 6)
 
     local list = Instance.new("ScrollingFrame")
     list.Name = "PlayerRows"
-    list.Position = UDim2.fromOffset(4, 38)
-    list.Size = UDim2.new(1, -8, 1, -44)
+    list.Position = UDim2.fromOffset(4, 32)
+    list.Size = UDim2.new(1, -8, 1, -36)
     list.BackgroundTransparency = 1
     list.BorderSizePixel = 0
     list.ScrollBarThickness = 3
@@ -822,6 +837,14 @@ local function createLeaderboard()
     padding.PaddingRight = UDim.new(0, 2)
     padding.PaddingBottom = UDim.new(0, 4)
     padding.Parent = list
+
+    local collapsed = false
+    collapse.MouseButton1Click:Connect(function()
+        collapsed = not collapsed
+        list.Visible = not collapsed
+        panel.Size = collapsed and UDim2.fromOffset(208, 34) or UDim2.fromOffset(208, 228)
+        collapse.Text = collapsed and "+" or "−"
+    end)
 
     for _, player in ipairs(Players:GetPlayers()) do watchLeaderboardPlayer(player) end
     renderLeaderboard()
