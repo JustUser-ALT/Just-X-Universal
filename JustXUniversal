@@ -40,6 +40,7 @@ local WalkSpeedValue = 16
 local JumpPowerValue = 50
 local speedEnabled = false
 local jumpEnabled = false
+local movementOriginals = {}
 local speedConn
 local jumpConn
 
@@ -587,8 +588,12 @@ local scheduleLeaderboardRefresh
 
 local function renderLeaderboard()
     if not leaderboardEnabled or not leaderboardGui or not leaderboardGui.Parent then return end
-    local list = leaderboardGui:FindFirstChild("PlayerRows")
-    if not list then return end
+    local panel = leaderboardGui:FindFirstChild("Panel")
+    local list = panel and panel:FindFirstChild("PlayerRows")
+    if not list then
+        warn("[Just X Universal] Leaderboard PlayerRows container was not found")
+        return
+    end
 
     for _, child in ipairs(list:GetChildren()) do
         if child:IsA("Frame") or child:IsA("TextLabel") then
