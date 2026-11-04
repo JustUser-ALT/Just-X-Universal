@@ -9,7 +9,7 @@ local Lighting = game:GetService("Lighting")
 local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
 
-local LIBRARY_URL = "https://raw.githubusercontent.com/JustUser-ALT/JustLib/main/JustLib.lua"
+local LIBRARY_URL = "https://raw.githubusercontent.com/JustUser-ALT/JustXLibrary/main/JustLib.lua"
 local ok, JL = pcall(function()
     return loadstring(game:HttpGet(LIBRARY_URL))()
 end)
@@ -411,17 +411,24 @@ Visual:Toggle({
 })
 
 local espEnabled = false
+local espAllPlayers = false
+local espTargets = {}
 local highlights = {}
 local characterConnections = {}
+local espDropdown
 
 local function removeHighlight(player)
     local h = highlights[player]
     if h then pcall(function() h:Destroy() end); highlights[player] = nil end
 end
 
+local function shouldHighlight(player)
+    return espEnabled and player ~= LocalPlayer and (espAllPlayers or espTargets[player.UserId] == true)
+end
+
 local function addHighlight(player, character)
     removeHighlight(player)
-    if not espEnabled or player == LocalPlayer or not character then return end
+    if not shouldHighlight(player) or not character then return end
     local h = Instance.new("Highlight")
     h.Name = "JXU_PlayerESP"
     h.Adornee = character
@@ -433,30 +440,73 @@ local function addHighlight(player, character)
     highlights[player] = h
 end
 
+local function updatePlayerESP(player)
+    if shouldHighlight(player) then
+        if player.Character then addHighlight(player, player.Character) end
+    else
+        removeHighlight(player)
+    end
+end
+
 local function watchPlayer(player)
     if characterConnections[player] then characterConnections[player]:Disconnect() end
     characterConnections[player] = player.CharacterAdded:Connect(function(character)
         task.wait(0.25)
-        addHighlight(player, character)
+        if character.Parent then updatePlayerESP(player) end
     end)
-    if player.Character then addHighlight(player, player.Character) end
+    updatePlayerESP(player)
 end
 
-local function setESP(enabled)
-    espEnabled = enabled
-    if enabled then
-        for _, player in ipairs(Players:GetPlayers()) do watchPlayer(player) end
+local function getESPOptions()
+    local options = {"All", {Divider = true}}
+    local players = Players:GetPlayers()
+    table.sort(players, function(a,b) return a.Name:lower() < b.Name:lower() end)
+    for _, player in ipairs(players) do
+        if player ~= LocalPlayer then table.insert(options, player.Name) end
+    end
+    return options
+end
+
+local function applyESPSelection(selection)
+    selection = type(selection) == "table" and selection or {}
+    local all, chosen = false, {}
+    for _, name in ipairs(selection) do
+        if name == "All" then all = true else chosen[name] = true end
+    end
+
+    if all and next(chosen) == nil then
+        espAllPlayers = true
+        table.clear(espTargets)
     else
-        for player in pairs(highlights) do removeHighlight(player) end
-        for player, conn in pairs(characterConnections) do conn:Disconnect(); characterConnections[player] = nil end
+        espAllPlayers = false
+        table.clear(espTargets)
+        for _, player in ipairs(Players:GetPlayers()) do
+            if chosen[player.Name] then espTargets[player.UserId] = true end
+        end
+    end
+
+    espEnabled = espAllPlayers or next(espTargets) ~= nil
+    for _, player in ipairs(Players:GetPlayers()) do updatePlayerESP(player) end
+
+    -- Selecting a named player while All is marked switches to individual mode.
+    if all and next(chosen) ~= nil and espDropdown then
+        local names = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and chosen[player.Name] then table.insert(names, player.Name) end
+        end
+        espDropdown:Set(names)
     end
 end
 
-Visual:Toggle({
+espDropdown = Visual:Dropdown({
     Name = "ESP",
-    Default = false,
-    Flag = "JXU_ESP",
-    Callback = setESP
+    Options = getESPOptions,
+    MultiSelect = true,
+    Search = true,
+    AutoUpdate = true,
+    Interval = 3,
+    Flag = "JXU_ESPPlayers",
+    Callback = applyESPSelection
 })
 
 Players.PlayerAdded:Connect(function(player)
@@ -811,13 +861,16 @@ Misc:Toggle({
 
 Players.PlayerAdded:Connect(function(player)
     if espEnabled then watchPlayer(player) end
+    if espDropdown then espDropdown:Refresh() end
     if leaderboardEnabled then watchLeaderboardPlayer(player); scheduleLeaderboardRefresh() end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
     expanded[player] = nil
     removeHighlight(player)
+    espTargets[player.UserId] = nil
     if characterConnections[player] then characterConnections[player]:Disconnect(); characterConnections[player] = nil end
+    if espDropdown then espDropdown:Refresh() end
     if playerWatchers[player] then
         for _, conn in ipairs(playerWatchers[player]) do conn:Disconnect() end
         playerWatchers[player] = nil
