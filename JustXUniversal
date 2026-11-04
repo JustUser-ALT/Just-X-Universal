@@ -583,6 +583,8 @@ local function getPlayerItems(player)
     return held, backpack, pack ~= nil
 end
 
+local scheduleLeaderboardRefresh
+
 local function renderLeaderboard()
     if not leaderboardEnabled or not leaderboardGui or not leaderboardGui.Parent then return end
     local list = leaderboardGui:FindFirstChild("PlayerRows")
@@ -718,7 +720,7 @@ local function renderLeaderboard()
     end)
 end
 
-local function scheduleLeaderboardRefresh()
+scheduleLeaderboardRefresh = function()
     if refreshPending then return end
     refreshPending = true
     task.defer(function()
@@ -834,7 +836,7 @@ local function createLeaderboard()
     end)
 
     for _, player in ipairs(Players:GetPlayers()) do watchLeaderboardPlayer(player) end
-    scheduleLeaderboardRefresh()
+    task.defer(scheduleLeaderboardRefresh)
 end
 
 local function setLeaderboard(enabled)
