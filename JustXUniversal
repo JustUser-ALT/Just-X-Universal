@@ -623,7 +623,7 @@ local function renderLeaderboard()
     for index, player in ipairs(players) do
         local row = Instance.new("Frame")
         row.Name = "Player_" .. tostring(player.UserId)
-        row.Size = UDim2.new(1, -6, 0, expanded[player] and 70 or 39)
+        row.Size = UDim2.new(1, -6, 0, expanded[player] and 82 or 39)
         row.BackgroundColor3 = LB.row
         row.BorderSizePixel = 0
         row.LayoutOrder = index
@@ -692,20 +692,86 @@ local function renderLeaderboard()
 
         if expanded[player] then
             local held, backpack, hasBackpack = getPlayerItems(player)
-            local detail = Instance.new("TextLabel")
-            detail.Position = UDim2.fromOffset(9, 40)
-            detail.Size = UDim2.new(1, -18, 0, 27)
-            detail.BackgroundTransparency = 1
-            detail.Font = Enum.Font.Gotham
-            detail.TextSize = 9
-            detail.TextColor3 = LB.muted
-            detail.TextXAlignment = Enum.TextXAlignment.Left
-            detail.TextYAlignment = Enum.TextYAlignment.Top
-            detail.TextWrapped = true
-            local heldText = #held > 0 and table.concat(held, ", ") or "Nothing"
-            local backpackText = hasBackpack and (#backpack > 0 and table.concat(backpack, ", ") or "Empty") or "Not replicated"
-            detail.Text = "Equipped: " .. heldText .. "\\nBackpack: " .. backpackText
+            local detail = Instance.new("Frame")
+            detail.Name = "ToolDetails"
+            detail.Position = UDim2.fromOffset(8, 42)
+            detail.Size = UDim2.new(1, -16, 0, 34)
+            detail.BackgroundColor3 = LB.bg
+            detail.BackgroundTransparency = 0.2
+            detail.BorderSizePixel = 0
             detail.Parent = row
+            Instance.new("UICorner", detail).CornerRadius = UDim.new(0, 5)
+
+            local heldColor = Color3.fromRGB(105, 210, 145)
+            local inventoryColor = Color3.fromRGB(105, 165, 255)
+
+            local function escapeRichText(value)
+                value = tostring(value):gsub("&", "&amp;")
+                value = value:gsub("<", "&lt;")
+                value = value:gsub(">", "&gt;")
+                value = value:gsub('"', "&quot;")
+                return value
+            end
+
+            local function makeToolText(items, emptyText, color)
+                if #items == 0 then
+                    return '<font color="#9BA3B4">' .. escapeRichText(emptyText) .. '</font>'
+                end
+                local names = {}
+                for _, itemName in ipairs(items) do
+                    table.insert(names, '<font color="#' .. color:ToHex() .. '">' .. escapeRichText(itemName) .. '</font>')
+                end
+                return table.concat(names, '<font color="#747D90">, </font>')
+            end
+
+            local function makeCategory(titleText, items, emptyText, color, position, width)
+                local category = Instance.new("Frame")
+                category.BackgroundTransparency = 1
+                category.Position = position
+                category.Size = width
+                category.Parent = detail
+
+                local heading = Instance.new("TextLabel")
+                heading.Size = UDim2.new(1, 0, 0, 12)
+                heading.BackgroundTransparency = 1
+                heading.Font = Enum.Font.GothamBold
+                heading.TextSize = 8
+                heading.TextColor3 = color
+                heading.TextXAlignment = Enum.TextXAlignment.Left
+                heading.Text = titleText
+                heading.Parent = category
+
+                local contents = Instance.new("TextLabel")
+                contents.Position = UDim2.fromOffset(0, 13)
+                contents.Size = UDim2.new(1, 0, 0, 19)
+                contents.BackgroundTransparency = 1
+                contents.Font = Enum.Font.GothamMedium
+                contents.TextSize = 9
+                contents.TextColor3 = LB.text
+                contents.TextXAlignment = Enum.TextXAlignment.Left
+                contents.TextYAlignment = Enum.TextYAlignment.Top
+                contents.TextWrapped = true
+                contents.RichText = true
+                contents.TextTruncate = Enum.TextTruncate.AtEnd
+                contents.Text = makeToolText(items, emptyText, color)
+                contents.Parent = category
+            end
+
+            makeCategory("IN HAND", held, "Nothing equipped", heldColor,
+                UDim2.fromOffset(7, 3), UDim2.new(0.5, -12, 1, -6))
+
+            local separator = Instance.new("Frame")
+            separator.Name = "CategoryDivider"
+            separator.AnchorPoint = Vector2.new(0.5, 0)
+            separator.Position = UDim2.new(0.5, 0, 0, 5)
+            separator.Size = UDim2.new(0, 1, 1, -10)
+            separator.BackgroundColor3 = LB.border
+            separator.BorderSizePixel = 0
+            separator.Parent = detail
+
+            makeCategory("IN INVENTORY", backpack,
+                hasBackpack and "Empty" or "Not replicated", inventoryColor,
+                UDim2.new(0.5, 7, 0, 3), UDim2.new(0.5, -14, 1, -6))
         end
     end
 
