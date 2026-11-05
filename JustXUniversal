@@ -31,6 +31,278 @@ local Main = Window:Tab({
     Type = "Grid"
 })
 
+local Antimations = Window:Tab({
+    Name = "Antimations",
+    Icon = "audio-lines",
+    Type = "Grid"
+})
+
+--==================================================
+-- ANIMATION PACKS
+--==================================================
+
+local AnimationSection = Antimations:Section({Title = "Animation Packs", Column = 1})
+local AssetService = game:GetService("AssetService")
+local HttpService = game:GetService("HttpService")
+local animationPacks = {}
+local selectedAnimationPack
+local activeAnimationMap = {}
+local animationApplyQueued = false
+local ANIMATION_CONFIG = "JustXUniversal_AnimationPacks.json"
+
+local animationSlots = {
+    idle = {"idle"},
+    walk = {"walk"},
+    run = {"run"},
+    jump = {"jump"},
+    fall = {"fall"},
+    climb = {"climb"},
+    swim = {"swim"},
+    swimidle = {"swimidle"}
+}
+
+local function loadAnimationPackConfig()
+    if type(isfile) ~= "function" or type(readfile) ~= "function" then return end
+    local okRead, raw = pcall(function()
+        if not isfile(ANIMATION_CONFIG) then return nil end
+        return readfile(ANIMATION_CONFIG)
+    end)
+    if not okRead or type(raw) ~= "string" or raw == "" then return end
+    local okDecode, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+    if okDecode and type(decoded) == "table" then
+        for _, pack in ipairs(decoded) do
+            if type(pack) == "table" and tonumber(pack.Id) then
+                table.insert(animationPacks, {
+                    Id = tostring(pack.Id),
+                    Name = tostring(pack.Name or ("Animation Pack " .. pack.Id))
+                })
+            end
+        end
+    end
+end
+
+local function saveAnimationPackConfig()
+    if type(writefile) ~= "function" then return false end
+    local okSave = pcall(function()
+        writefile(ANIMATION_CONFIG, HttpService:JSONEncode(animationPacks))
+    end)
+    return okSave
+end
+
+local function getAnimationPackNames()
+    local names = {}
+    for _, pack in ipairs(animationPacks) do
+        table.insert(names, pack.Name .. "  [" .. pack.Id .. "]")
+    end
+    return names
+end
+
+local function findPackByOption(option)
+    if type(option) ~= "string" then return nil end
+    local id = option:match("%[(%d+)%]$")
+    for _, pack in ipairs(animationPacks) do
+        if pack.Id == id then return pack end
+    end
+end
+
+local function classifyAnimationName(name)
+    local normalized = tostring(name):lower():gsub("[%s_%-]", "")
+    if normalized:find("swimidle", 1, true) then return "swimidle" end
+    for slot in pairs(animationSlots) do
+        if normalized:find(slot, 1, true) then return slot end
+    end
+    return nil
+end
+
+local function resolveAnimationPack(bundleId)
+    local details = AssetService:GetBundleDetailsAsync(tonumber(bundleId))
+    if type(details) ~= "table" or type(details.Items) ~= "table" then
+        error("Roblox returned invalid bundle details")
+    end
+    if details.BundleType and not tostring(details.BundleType):lower():find("animation", 1, true) then
+        error("This bundle is not an Animation Pack")
+    end
+
+    local map = {}
+    for _, item in ipairs(details.Items) do
+        if item.Type == "Asset" and (item.AssetType == "Animation" or item.AssetType == nil) then
+            local slot = classifyAnimationName(item.Name)
+            if slot and tonumber(item.Id) then map[slot] = tostring(item.Id) end
+        end
+    end
+    if next(map) == nil then
+        error("No named animation assets were found in this pack")
+    end
+    return {
+        Id = tostring(bundleId),
+        Name = tostring(details.Name or ("Animation Pack " .. bundleId)),
+        Animations = map
+    }
+end
+
+local function findAnimationTargetSlot(animationObject)
+    local current = animationObject
+    local names = {}
+    while current and current.Name ~= "Animate" do
+        table.insert(names, 1, current.Name:lower())
+        current = current.Parent
+    end
+    local path = table.concat(names, "/")
+    if path:find("swimidle", 1, true) then return "swimidle" end
+    if path:find("swim", 1, true) then return "swim" end
+    if path:find("idle", 1, true) then return "idle" end
+    for slot in pairs(animationSlots) do
+        if slot ~= "idle" and path:find(slot, 1, true) then return slot end
+    end
+end
+
+local function applyAnimationMap(restartAnimate)
+    local character = LocalPlayer.Character
+    if not character then return end
+    local animate = character:FindFirstChild("Animate")
+    if not animate then return end
+
+    local changed = false
+    for _, object in ipairs(animate:GetDescendants()) do
+        if object:IsA("Animation") then
+            local slot = findAnimationTargetSlot(object)
+            local assetId = slot and activeAnimationMap[slot]
+            if assetId then
+                local content = "rbxassetid://" .. assetId
+                if object.AnimationId ~= content then
+                    object.AnimationId = content
+                    changed = true
+                end
+            end
+        end
+    end
+
+    if changed and restartAnimate and animate:IsA("LocalScript") then
+        local wasDisabled = animate.Disabled
+        animate.Disabled = true
+        task.defer(function()
+            if animate.Parent then animate.Disabled = wasDisabled end
+        end)
+    end
+end
+
+local function queueAnimationReapply(restartAnimate)
+    if animationApplyQueued then return end
+    animationApplyQueued = true
+    task.defer(function()
+        animationApplyQueued = false
+        applyAnimationMap(restartAnimate)
+    end)
+end
+
+local function watchAnimationCharacter(character)
+    task.spawn(function()
+        local animate = character:WaitForChild("Animate", 10)
+        if not animate then return end
+        task.wait(0.35)
+        applyAnimationMap(true)
+        animate.DescendantAdded:Connect(function(object)
+            if object:IsA("Animation") then
+                task.defer(function() applyAnimationMap(false) end)
+            end
+        end)
+        character.ChildAdded:Connect(function(child)
+            if child:IsA("Tool") then
+                task.defer(function() applyAnimationMap(false) end)
+            end
+        end)
+    end)
+end
+
+local function applySelectedAnimationPack()
+    if not selectedAnimationPack then return end
+    local okResolve, resolved = pcall(resolveAnimationPack, selectedAnimationPack.Id)
+    if not okResolve then
+        warn("[Just X Universal] Animation pack error:", resolved)
+        if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
+        return
+    end
+    activeAnimationMap = resolved.Animations
+    queueAnimationReapply(true)
+    if JL.Notify then
+        JL:Notify({Title = "Antimations", Desc = "Applied " .. resolved.Name, Type = "Success", Duration = 4})
+    end
+end
+
+loadAnimationPackConfig()
+
+local animationPackInput = AnimationSection:Input({
+    Name = "Animation Pack ID",
+    Placeholder = "Enter Animation Bundle ID",
+    Flag = "JXU_AnimationPackInput"
+})
+
+local animationPackDropdown = AnimationSection:Dropdown({
+    Name = "Saved Packs",
+    Options = getAnimationPackNames,
+    Search = true,
+    MultiSelect = false,
+    Flag = "JXU_SelectedAnimationPack",
+    Callback = function(value)
+        selectedAnimationPack = findPackByOption(value)
+    end
+})
+
+AnimationSection:Button({
+    Name = "Add Animation Pack",
+    Callback = function()
+        local bundleId = tostring(animationPackInput:Get() or ""):match("%d+")
+        if not bundleId then
+            if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Enter a valid bundle ID", Type = "Error", Duration = 3}) end
+            return
+        end
+        for _, existing in ipairs(animationPacks) do
+            if existing.Id == bundleId then
+                if JL.Notify then JL:Notify({Title = "Antimations", Desc = "This pack is already saved", Type = "Info", Duration = 3}) end
+                return
+            end
+        end
+        local okResolve, resolved = pcall(resolveAnimationPack, bundleId)
+        if not okResolve then
+            if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
+            return
+        end
+        table.insert(animationPacks, {Id = resolved.Id, Name = resolved.Name})
+        saveAnimationPackConfig()
+        if animationPackDropdown and animationPackDropdown.Refresh then
+            animationPackDropdown:Refresh()
+        end
+        if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Saved: " .. resolved.Name, Type = "Success", Duration = 4}) end
+    end
+})
+
+AnimationSection:Button({
+    Name = "Apply Selected Pack",
+    Callback = applySelectedAnimationPack
+})
+
+AnimationSection:Button({
+    Name = "Remove Selected Pack",
+    Callback = function()
+        if not selectedAnimationPack then return end
+        for index, pack in ipairs(animationPacks) do
+            if pack.Id == selectedAnimationPack.Id then
+                table.remove(animationPacks, index)
+                break
+            end
+        end
+        selectedAnimationPack = nil
+        saveAnimationPackConfig()
+        if animationPackDropdown and animationPackDropdown.Refresh then
+            animationPackDropdown:Refresh()
+        end
+    end
+})
+
+LocalPlayer.CharacterAdded:Connect(watchAnimationCharacter)
+if LocalPlayer.Character then watchAnimationCharacter(LocalPlayer.Character) end
+
+
 --==================================================
 -- CHARACTER
 --==================================================
