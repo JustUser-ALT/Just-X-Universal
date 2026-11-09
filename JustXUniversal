@@ -47,6 +47,7 @@ local HttpService = game:GetService("HttpService")
 local animationPacks = {}
 local selectedAnimationPack
 local activeAnimationMap = {}
+local originalAnimationIds = setmetatable({}, {__mode = "k"})
 local animationApplyQueued = false
 local ANIMATION_CONFIG = "JustXUniversal_AnimationPacks.json"
 
@@ -166,12 +167,21 @@ local function findAnimationTargetSlot(animationObject)
     end
 end
 
+local function captureOriginalAnimationIds(animate)
+    for _, object in ipairs(animate:GetDescendants()) do
+        if object:IsA("Animation") and originalAnimationIds[object] == nil then
+            originalAnimationIds[object] = object.AnimationId
+        end
+    end
+end
+
 local function applyAnimationMap(restartAnimate)
     local character = LocalPlayer.Character
     if not character then return end
     local animate = character:FindFirstChild("Animate")
     if not animate then return end
 
+    captureOriginalAnimationIds(animate)
     local changed = false
     for _, object in ipairs(animate:GetDescendants()) do
         if object:IsA("Animation") then
@@ -225,26 +235,65 @@ local function watchAnimationCharacter(character)
 end
 
 local function applySelectedAnimationPack()
-    if not selectedAnimationPack then return end
+    if not selectedAnimationPack then
+        if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Select an Animation Pack first", Type = "Info", Duration = 3}) end
+        return
+    end
     local okResolve, resolved = pcall(resolveAnimationPack, selectedAnimationPack.Id)
     if not okResolve then
         warn("[Just X Universal] Animation pack error:", resolved)
         if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
         return
     end
+    local character = LocalPlayer.Character
+    local animate = character and character:FindFirstChild("Animate")
+    if animate then captureOriginalAnimationIds(animate) end
     activeAnimationMap = resolved.Animations
     queueAnimationReapply(true)
     if JL.Notify then
-        JL:Notify({Title = "Antimations", Desc = "Applied " .. resolved.Name, Type = "Success", Duration = 4})
+        JL:Notify({Title = "Antimations", Desc = "Applied " .. resolved.Name, Type = "Success", Duration = 4}) end
+end
+
+local function resetAnimationPack()
+    activeAnimationMap = {}
+    local character = LocalPlayer.Character
+    local animate = character and character:FindFirstChild("Animate")
+    if animate then
+        local changed = false
+        for _, object in ipairs(animate:GetDescendants()) do
+            if object:IsA("Animation") then
+                local originalId = originalAnimationIds[object]
+                if originalId ~= nil and object.AnimationId ~= originalId then
+                    object.AnimationId = originalId
+                    changed = true
+                end
+            end
+        end
+        if changed and animate:IsA("LocalScript") then
+            local wasDisabled = animate.Disabled
+            animate.Disabled = true
+            task.defer(function()
+                if animate.Parent then animate.Disabled = wasDisabled end
+            end)
+        end
+    end
+    if JL.Notify then
+        JL:Notify({Title = "Antimations", Desc = "Original character animations restored", Type = "Success", Duration = 4})
     end
 end
 
 loadAnimationPackConfig()
 
 local animationPackInput = AnimationSection:Input({
-    Name = "Animation Pack ID",
-    Placeholder = "Enter Animation Bundle ID",
+    Name = "Animation Pack ID / Link",
+    Placeholder = "Paste Bundle ID or Roblox URL",
     Flag = "JXU_AnimationPackInput"
+})
+
+local animationPackNameInput = AnimationSection:Input({
+    Name = "Custom Pack Name (Optional)",
+    Placeholder = "Leave empty to use Roblox name",
+    Flag = "JXU_AnimationPackNameInput"
 })
 
 local animationPackDropdown = AnimationSection:Dropdown({
@@ -261,9 +310,16 @@ local animationPackDropdown = AnimationSection:Dropdown({
 AnimationSection:Button({
     Name = "Add Animation Pack",
     Callback = function()
-        local bundleId = tostring(animationPackInput:Get() or ""):match("%d+")
+        local rawInput = tostring(animationPackInput:Get() or ""):match("^%s*(.-)%s*$")
+        local bundleId
+        if rawInput:match("^%d+$") then
+            bundleId = rawInput
+        else
+            bundleId = rawInput:match("[Rr]oblox%.com/bundles/(%d+)")
+                or rawInput:match("/bundles/(%d+)")
+        end
         if not bundleId then
-            if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Enter a valid bundle ID", Type = "Error", Duration = 3}) end
+            if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Enter a Bundle ID or a valid Roblox bundle link", Type = "Error", Duration = 3}) end
             return
         end
         for _, existing in ipairs(animationPacks) do
@@ -277,7 +333,9 @@ AnimationSection:Button({
             if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
             return
         end
-        table.insert(animationPacks, {Id = resolved.Id, Name = resolved.Name})
+        local customName = tostring(animationPackNameInput:Get() or ""):match("^%s*(.-)%s*$")
+        local savedName = customName ~= "" and customName or resolved.Name
+        table.insert(animationPacks, {Id = resolved.Id, Name = savedName})
         saveAnimationPackConfig()
         if animationPackDropdown and animationPackDropdown.Refresh then
             animationPackDropdown:Refresh()
@@ -289,6 +347,11 @@ AnimationSection:Button({
 AnimationSection:Button({
     Name = "Apply Selected Pack",
     Callback = applySelectedAnimationPack
+})
+
+AnimationSection:Button({
+    Name = "Reset Animation",
+    Callback = resetAnimationPack
 })
 
 AnimationSection:Button({
