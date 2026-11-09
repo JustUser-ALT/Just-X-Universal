@@ -107,10 +107,14 @@ end
 
 local function classifyAnimationName(name)
     local normalized = tostring(name):lower():gsub("[%s_%-]", "")
-    if normalized:find("swimidle", 1, true) then return "swimidle" end
-    for slot in pairs(animationSlots) do
-        if normalized:find(slot, 1, true) then return slot end
-    end
+    if normalized:find("swimidle", 1, true) or normalized:find("swimmingidle", 1, true) then return "swimidle" end
+    if normalized:find("idle", 1, true) then return "idle" end
+    if normalized:find("walk", 1, true) then return "walk" end
+    if normalized:find("run", 1, true) then return "run" end
+    if normalized:find("jump", 1, true) then return "jump" end
+    if normalized:find("fall", 1, true) then return "fall" end
+    if normalized:find("climb", 1, true) then return "climb" end
+    if normalized:find("swim", 1, true) then return "swim" end
     return nil
 end
 
@@ -119,19 +123,25 @@ local function resolveAnimationPack(bundleId)
     if type(details) ~= "table" or type(details.Items) ~= "table" then
         error("Roblox returned invalid bundle details")
     end
-    if details.BundleType and not tostring(details.BundleType):lower():find("animation", 1, true) then
-        error("This bundle is not an Animation Pack")
+    local bundleType = tostring(details.BundleType or "")
+    if bundleType ~= "" and not bundleType:lower():find("animation", 1, true) then
+        error("This bundle is not an Animation Pack (BundleType: " .. bundleType .. ")")
     end
 
-    local map = {}
+    local map, returnedItems = {}, {}
     for _, item in ipairs(details.Items) do
-        if item.Type == "Asset" and (item.AssetType == "Animation" or item.AssetType == nil) then
-            local slot = classifyAnimationName(item.Name)
-            if slot and tonumber(item.Id) then map[slot] = tostring(item.Id) end
+        local itemName = tostring(item.Name or "Unnamed")
+        local itemType = tostring(item.Type or "?")
+        local assetType = tostring(item.AssetType or "?")
+        table.insert(returnedItems, itemName .. " [" .. itemType .. "/" .. assetType .. "]")
+        if item.Type == "Asset" and tonumber(item.Id) then
+            local slot = classifyAnimationName(itemName)
+            if slot then map[slot] = tostring(item.Id) end
         end
     end
     if next(map) == nil then
-        error("No named animation assets were found in this pack")
+        local summary = #returnedItems > 0 and table.concat(returnedItems, ", ") or "Items is empty"
+        error("No animation slots recognized. BundleType=" .. bundleType .. "; returned: " .. summary)
     end
     return {
         Id = tostring(bundleId),
