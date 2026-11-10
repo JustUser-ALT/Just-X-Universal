@@ -49,6 +49,7 @@ local selectedAnimationPack
 local activeAnimationMap = {}
 local originalAnimationIds = setmetatable({}, {__mode = "k"})
 local animationApplyQueued = false
+local animationRestartedCharacters = setmetatable({}, {__mode = "k"})
 local ANIMATION_CONFIG = "JustXUniversal_AnimationPacks.json"
 
 local animationSlots = {
@@ -196,11 +197,26 @@ local function captureOriginalAnimationIds(animate)
     end
 end
 
+local function restartAnimateOnce(character, animate)
+    if not character or not animate or not animate:IsA("LocalScript") then return false end
+    if animationRestartedCharacters[character] then return false end
+
+    animationRestartedCharacters[character] = true
+    local wasDisabled = animate.Disabled
+    animate.Disabled = true
+    task.defer(function()
+        if animate.Parent then
+            animate.Disabled = wasDisabled
+        end
+    end)
+    return true
+end
+
 local function applyAnimationMap(restartAnimate)
     local character = LocalPlayer.Character
-    if not character then return end
+    if not character then return false end
     local animate = character:FindFirstChild("Animate")
-    if not animate then return end
+    if not animate then return false end
 
     captureOriginalAnimationIds(animate)
     local changed = false
@@ -218,13 +234,10 @@ local function applyAnimationMap(restartAnimate)
         end
     end
 
-    if changed and restartAnimate and animate:IsA("LocalScript") then
-        local wasDisabled = animate.Disabled
-        animate.Disabled = true
-        task.defer(function()
-            if animate.Parent then animate.Disabled = wasDisabled end
-        end)
+    if changed and restartAnimate then
+        restartAnimateOnce(character, animate)
     end
+    return changed
 end
 
 local function queueAnimationReapply(restartAnimate)
@@ -240,16 +253,18 @@ local function watchAnimationCharacter(character)
     task.spawn(function()
         local animate = character:WaitForChild("Animate", 10)
         if not animate then return end
+
         task.wait(0.35)
+        if character ~= LocalPlayer.Character or not animate.Parent then return end
         applyAnimationMap(true)
+
         animate.DescendantAdded:Connect(function(object)
             if object:IsA("Animation") then
-                task.defer(function() applyAnimationMap(false) end)
-            end
-        end)
-        character.ChildAdded:Connect(function(child)
-            if child:IsA("Tool") then
-                task.defer(function() applyAnimationMap(false) end)
+                task.defer(function()
+                    if character == LocalPlayer.Character then
+                        applyAnimationMap(false)
+                    end
+                end)
             end
         end)
     end)
@@ -291,12 +306,8 @@ local function resetAnimationPack()
                 end
             end
         end
-        if changed and animate:IsA("LocalScript") then
-            local wasDisabled = animate.Disabled
-            animate.Disabled = true
-            task.defer(function()
-                if animate.Parent then animate.Disabled = wasDisabled end
-            end)
+        if changed then
+            restartAnimateOnce(character, animate)
         end
     end
     if JL.Notify then
