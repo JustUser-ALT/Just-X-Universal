@@ -162,6 +162,21 @@ local function resolveAnimationPack(bundleId)
             if slot then map[slot] = tostring(item.Id) end
         end
     end
+    -- Roblox's legacy Cartoony bundle entries expose catalog item IDs (837...),
+    -- but the playable animation clip IDs are the canonical 742... assets.
+    if tostring(bundleId) == "56" then
+        map = {
+            run = "742638842",
+            walk = "742640026",
+            jump = "742637942",
+            idle = "742637544",
+            fall = "742637151",
+            swim = "742639220",
+            swimidle = "742639812",
+            climb = "742636889"
+        }
+    end
+
     if next(map) == nil then
         local summary = #returnedItems > 0 and table.concat(returnedItems, ", ") or "Items is empty"
         error("No animation slots recognized. BundleType=" .. bundleType .. "; returned: " .. summary)
