@@ -48,8 +48,9 @@ local animationPacks = {}
 local selectedAnimationPack
 local activeAnimationMap = {}
 local originalAnimationIds = setmetatable({}, {__mode = "k"})
+local managedAnimationIds = {}
 local animationApplyQueued = false
-local animationRestartedCharacters = setmetatable({}, {__mode = "k"})
+local animationRestartRequested = false
 local ANIMATION_CONFIG = "JustXUniversal_AnimationPacks.json"
 
 local animationSlots = {
@@ -131,161 +132,129 @@ local function syncSelectedAnimationPack()
     return selectedAnimationPack
 end
 
-local function classifyAnimationName(name)
-    local normalized = tostring(name):lower():gsub("[%s_%-]", "")
-    if normalized:find("swimidle", 1, true) or normalized:find("swimmingidle", 1, true) then return "swimidle" end
-    if normalized:find("idle", 1, true) then return "idle" end
-    if normalized:find("walk", 1, true) then return "walk" end
-    if normalized:find("run", 1, true) then return "run" end
-    if normalized:find("jump", 1, true) then return "jump" end
-    if normalized:find("fall", 1, true) then return "fall" end
-    if normalized:find("climb", 1, true) then return "climb" end
-    if normalized:find("swim", 1, true) then return "swim" end
-    return nil
-end
-
-local ANIMATION_REFERENCE_URLS = {
-    "https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/animation/using.md",
-    "https://github.com/Roblox/creator-docs/raw/refs/heads/main/content/en-us/animation/using.md"
-}
-local animationReferenceCache
-
-local function normalizeAnimationReferenceName(value)
+local function normalizeAnimationToken(value)
     return tostring(value or ""):lower():gsub("[^%w]", "")
 end
 
-local function isValidAnimationReference(content)
-    if type(content) ~= "string" or content == "" then return false end
-    local lower = content:lower()
-    return lower:find("catalog animations", 1, true) ~= nil
-        and lower:find("<tr", 1, true) ~= nil
-        and lower:find("<grid item", 1, true) ~= nil
+local DESCRIPTION_TO_TARGETS = {
+    IdleAnimation = {"idle"},
+    WalkAnimation = {"walk"},
+    RunAnimation = {"run"},
+    JumpAnimation = {"jump"},
+    FallAnimation = {"fall"},
+    ClimbAnimation = {"climb"},
+    SwimAnimation = {"swim", "swimidle"}
+}
+
+local resolvedAnimationCache = {}
+
+local function getBundleAnimationCategory(item)
+    local candidates = {item.AssetType, item.Type, item.ItemType, item.Name}
+    for _, candidate in ipairs(candidates) do
+        local token = normalizeAnimationToken(candidate)
+        if token:find("swimidle", 1, true) then return "SwimAnimation" end
+        if token:find("idleanimation", 1, true) or token == "idle" then return "IdleAnimation" end
+        if token:find("walkanimation", 1, true) or token == "walk" then return "WalkAnimation" end
+        if token:find("runanimation", 1, true) or token == "run" then return "RunAnimation" end
+        if token:find("jumpanimation", 1, true) or token == "jump" then return "JumpAnimation" end
+        if token:find("fallanimation", 1, true) or token == "fall" then return "FallAnimation" end
+        if token:find("climbanimation", 1, true) or token == "climb" then return "ClimbAnimation" end
+        if token:find("swimanimation", 1, true) or token == "swim" then return "SwimAnimation" end
+    end
+    return nil
 end
 
-local function downloadAnimationReference()
-    local errors = {}
-    local requestFunction = request or http_request
-    if not requestFunction and syn then
-        requestFunction = syn.request
+local function findGeneratedAnimation(animate, path)
+    local current = animate
+    for _, name in ipairs(path) do
+        current = current and current:FindFirstChild(name)
+        if not current then return nil end
     end
-
-    for _, url in ipairs(ANIMATION_REFERENCE_URLS) do
-        if game and game.HttpGet then
-            local okFetch, content = pcall(function()
-                return game:HttpGet(url)
-            end)
-            if okFetch and isValidAnimationReference(content) then
-                return content
-            end
-            table.insert(errors, "HttpGet: " .. (okFetch and "unexpected response format" or tostring(content)))
-        end
-
-        if type(requestFunction) == "function" then
-            local okRequest, response = pcall(function()
-                return requestFunction({Url = url, Method = "GET"})
-            end)
-            local body = type(response) == "table" and (response.Body or response.body)
-            if okRequest and isValidAnimationReference(body) then
-                return body
-            end
-            if not okRequest then
-                table.insert(errors, "request: " .. tostring(response))
-            else
-                local status = type(response) == "table" and (response.StatusCode or response.Status)
-                table.insert(errors, "request: HTTP " .. tostring(status or "unknown") .. " / unexpected response format")
-            end
-        end
-    end
-
-    return nil, #errors > 0 and table.concat(errors, " | ") or "No supported HTTP method is available"
-end
-
-local function getOfficialAnimationReference(bundleId, bundleName)
-    if not animationReferenceCache then
-        local content, fetchError = downloadAnimationReference()
-        if not content then
-            return nil, "Could not download Roblox's official animation reference: " .. tostring(fetchError)
-        end
-        animationReferenceCache = content
-    end
-
-    local lowerContent = animationReferenceCache:lower()
-    local sectionStart = lowerContent:find("catalog animations", 1, true)
-    if not sectionStart then
-        return nil, "Catalog animation section was not found in Roblox's official source"
-    end
-
-    local section = animationReferenceCache:sub(sectionStart)
-    local targetBundleId = tostring(bundleId)
-    local bundleKey = normalizeAnimationReferenceName(bundleName)
-
-    for row in section:gmatch("<tr[^>]*>(.-)</tr>") do
-        local nameCell, animationCell = row:match("<td[^>]*>(.-)</td>%s*<td[^>]*>(.-)</td>")
-        if nameCell and animationCell then
-            local rowBundleId = nameCell:lower():match("roblox%.com/bundles/(%d+)")
-            local plainName = nameCell:gsub("<[^>]->", " "):gsub("%*%*", ""):gsub("&nbsp;", " ")
-            local rowKey = normalizeAnimationReferenceName(plainName)
-            local matchesId = rowBundleId and rowBundleId == targetBundleId
-            local matchesName = #rowKey >= 4 and bundleKey ~= "" and (bundleKey:find(rowKey, 1, true) or rowKey:find(bundleKey, 1, true))
-
-            if matchesId or (not rowBundleId and matchesName) then
-                local map = {}
-                for animationBlock in animationCell:gmatch("<Grid item[^>]*>(.-)</Grid>") do
-                    local label = animationBlock:match("%*%*(.-)%*%*")
-                    local assetId = animationBlock:match("<br%s*/>%s*(%d+)")
-                    if label and assetId then
-                        local slot = normalizeAnimationReferenceName(label)
-                        if slot == "swimidle" then
-                            map.swimidle = assetId
-                        elseif slot == "run" or slot == "walk" or slot == "jump"
-                            or slot == "idle" or slot == "fall" or slot == "swim" or slot == "climb" then
-                            if not map[slot] then map[slot] = assetId end
-                        end
-                    end
-                end
-
-                if next(map) then
-                    return map
-                end
-                return nil, "The matching catalog entry contained no readable animation IDs"
-            end
-        end
-    end
-
-    return nil, "Bundle " .. targetBundleId .. " (" .. tostring(bundleName) .. ") is not listed in Roblox's official catalog animation reference"
+    return current
 end
 
 local function resolveAnimationPack(bundleId)
+    bundleId = tostring(bundleId)
+    if resolvedAnimationCache[bundleId] then
+        return resolvedAnimationCache[bundleId]
+    end
+
     local details = AssetService:GetBundleDetailsAsync(tonumber(bundleId))
     if type(details) ~= "table" or type(details.Items) ~= "table" then
         error("Roblox returned invalid bundle details")
     end
-    local bundleType = tostring(details.BundleType or "")
-    local packName = tostring(details.Name or ("Animation Pack " .. bundleId))
 
-    local map, referenceError = getOfficialAnimationReference(bundleId, packName)
-    if not map then
-        error(tostring(referenceError) .. "; unsupported bundles will not be applied using unverified item IDs")
-    end
-    local returnedItems = {}
-    local source = "Roblox official catalog reference"
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then error("Current character Humanoid is unavailable") end
+
+    local description = humanoid:GetAppliedDescription()
+    local found = {}
     for _, item in ipairs(details.Items) do
-        local itemName = tostring(item.Name or "Unnamed")
-        local itemType = tostring(item.Type or "?")
-        local assetType = tostring(item.AssetType or "?")
-        table.insert(returnedItems, itemName .. " [" .. itemType .. "/" .. assetType .. "]")
+        local category = getBundleAnimationCategory(item)
+        local assetId = tonumber(item.Id or item.AssetId)
+        if category and assetId then
+            description[category] = assetId
+            found[category] = assetId
+        end
     end
+    if not next(found) then error("No supported animation items were found in this bundle") end
 
-    if next(map) == nil then
-        local summary = #returnedItems > 0 and table.concat(returnedItems, ", ") or "Items are empty"
-        error("No animation slots recognized. BundleType=" .. bundleType .. "; " .. summary .. "; reference: " .. tostring(referenceError))
+    local temporaryModel
+    local okResolve, result = pcall(function()
+        temporaryModel = Players:CreateHumanoidModelFromDescription(
+            description,
+            Enum.HumanoidRigType.R15
+        )
+        if not temporaryModel then error("Roblox could not create the temporary R15 resolver model") end
+
+        local generatedAnimate = temporaryModel:FindFirstChild("Animate")
+        if not generatedAnimate then error("Temporary R15 model has no Animate script") end
+
+        local animations = {}
+        local generatedPaths = {
+            idle = {{"idle", "Animation1"}, {"idle", "Animation2"}},
+            walk = {{"walk", "WalkAnim"}},
+            run = {{"run", "RunAnim"}},
+            jump = {{"jump", "JumpAnim"}},
+            fall = {{"fall", "FallAnim"}},
+            climb = {{"climb", "ClimbAnim"}},
+            swim = {{"swim", "Swim"}},
+            swimidle = {{"swimidle", "SwimIdle"}}
+        }
+
+        for category, targets in pairs(DESCRIPTION_TO_TARGETS) do
+            if found[category] then
+                for _, target in ipairs(targets) do
+                    for _, targetPath in ipairs(generatedPaths[target] or {}) do
+                        local animation = findGeneratedAnimation(generatedAnimate, targetPath)
+                        if animation and animation:IsA("Animation") then
+                            local animationId = animation.AnimationId
+                            if type(animationId) == "string" and animationId ~= "" then
+                                animations[target] = animationId:gsub("^rbxassetid://", "")
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if not next(animations) then error("Roblox did not resolve any generated animation IDs") end
+        return {
+            Id = bundleId,
+            Name = tostring(details.Name or ("Animation Pack " .. bundleId)),
+            Animations = animations,
+            Source = "HumanoidDescription resolver"
+        }
+    end)
+
+    if temporaryModel then
+        pcall(function() temporaryModel:Destroy() end)
     end
-    return {
-        Id = tostring(bundleId),
-        Name = packName,
-        Animations = map,
-        Source = source
-    }
+    if not okResolve then error(result) end
+
+    resolvedAnimationCache[bundleId] = result
+    return result
 end
 
 local function findAnimationTargetSlot(animationObject)
@@ -308,26 +277,39 @@ local function captureOriginalAnimationIds(animate)
     for _, object in ipairs(animate:GetDescendants()) do
         if object:IsA("Animation") and originalAnimationIds[object] == nil then
             originalAnimationIds[object] = object.AnimationId
+            if object.AnimationId ~= "" then
+                managedAnimationIds[object.AnimationId] = true
+            end
         end
     end
 end
 
-local function restartAnimateOnce(character, animate)
+local function restartAnimate(character, animate)
     if not character or not animate or not animate:IsA("LocalScript") then return false end
-    if animationRestartedCharacters[character] then return false end
 
-    animationRestartedCharacters[character] = true
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            local trackAnimation
+            local okTrack = pcall(function() trackAnimation = track.Animation end)
+            local trackId = okTrack and trackAnimation and trackAnimation.AnimationId
+            if trackId and managedAnimationIds[trackId] then
+                pcall(function() track:Stop(0) end)
+                pcall(function() track:Destroy() end)
+            end
+        end
+    end
+
     local wasDisabled = animate.Disabled
     animate.Disabled = true
-    task.defer(function()
-        if animate.Parent then
-            animate.Disabled = wasDisabled
-        end
-    end)
+    task.wait(0.1)
+    if animate.Parent then animate.Disabled = wasDisabled end
+    task.wait(0.2)
     return true
 end
 
-local function applyAnimationMap(restartAnimate)
+local function applyAnimationMap(restartAfterApply)
     local character = LocalPlayer.Character
     if not character then return false end
     local animate = character:FindFirstChild("Animate")
@@ -339,28 +321,33 @@ local function applyAnimationMap(restartAnimate)
         if object:IsA("Animation") then
             local slot = findAnimationTargetSlot(object)
             local assetId = slot and activeAnimationMap[slot]
-            if assetId then
-                local content = "rbxassetid://" .. assetId
-                if object.AnimationId ~= content then
-                    object.AnimationId = content
-                    changed = true
-                end
+            local originalId = originalAnimationIds[object]
+            local targetId = assetId and ("rbxassetid://" .. tostring(assetId)) or originalId
+
+            if assetId then managedAnimationIds[targetId] = true end
+            if targetId and object.AnimationId ~= targetId then
+                object.AnimationId = targetId
+                changed = true
             end
         end
     end
 
-    if changed and restartAnimate then
-        restartAnimateOnce(character, animate)
+    if changed and restartAfterApply then
+        restartAnimate(character, animate)
     end
     return changed
 end
 
-local function queueAnimationReapply(restartAnimate)
+local function queueAnimationReapply(restartAfterApply)
+    animationRestartRequested = animationRestartRequested or restartAfterApply == true
     if animationApplyQueued then return end
     animationApplyQueued = true
+
     task.defer(function()
+        local shouldRestart = animationRestartRequested
+        animationRestartRequested = false
         animationApplyQueued = false
-        applyAnimationMap(restartAnimate)
+        applyAnimationMap(shouldRestart)
     end)
 end
 
@@ -368,7 +355,6 @@ local function watchAnimationCharacter(character)
     task.spawn(function()
         local animate = character:WaitForChild("Animate", 10)
         if not animate then return end
-
         task.wait(0.35)
         if character ~= LocalPlayer.Character or not animate.Parent then return end
         applyAnimationMap(true)
@@ -377,6 +363,7 @@ local function watchAnimationCharacter(character)
             if object:IsA("Animation") then
                 task.defer(function()
                     if character == LocalPlayer.Character then
+                        captureOriginalAnimationIds(animate)
                         applyAnimationMap(false)
                     end
                 end)
@@ -408,25 +395,14 @@ end
 
 local function resetAnimationPack()
     activeAnimationMap = {}
-    local character = LocalPlayer.Character
-    local animate = character and character:FindFirstChild("Animate")
-    if animate then
-        local changed = false
-        for _, object in ipairs(animate:GetDescendants()) do
-            if object:IsA("Animation") then
-                local originalId = originalAnimationIds[object]
-                if originalId ~= nil and object.AnimationId ~= originalId then
-                    object.AnimationId = originalId
-                    changed = true
-                end
-            end
-        end
-        if changed then
-            restartAnimateOnce(character, animate)
-        end
-    end
+    local changed = applyAnimationMap(true)
     if JL.Notify then
-        JL:Notify({Title = "Antimations", Desc = "Original character animations restored", Type = "Success", Duration = 4})
+        JL:Notify({
+            Title = "Antimations",
+            Desc = changed and "Original character animations restored" or "Original animations are already active",
+            Type = "Success",
+            Duration = 4
+        })
     end
 end
 
