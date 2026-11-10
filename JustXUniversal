@@ -179,7 +179,7 @@ local function getOfficialAnimationReference(bundleName)
 
             if #rowKey >= 4 and (bundleKey:find(rowKey, 1, true) or rowKey:find(bundleKey, 1, true)) then
                 local map = {}
-                for animationBlock in animationCell:gmatch("<Grid[^>]*>(.-)</Grid>") do
+                for animationBlock in animationCell:gmatch("<Grid item[^>]*>(.-)</Grid>") do
                     local label = animationBlock:match("%*%*(.-)%*%*")
                     local assetId = animationBlock:match("(%d+)")
                     if label and assetId then
@@ -357,7 +357,7 @@ local function applySelectedAnimationPack()
     activeAnimationMap = resolved.Animations
     queueAnimationReapply(true)
     if JL.Notify then
-        JL:Notify({Title = "Antimations", Desc = "Applied " .. resolved.Name, Type = "Success", Duration = 4}) end
+        JL:Notify({Title = "Antimations", Desc = "Applied " .. resolved.Name .. " (" .. resolved.Source .. ")", Type = "Success", Duration = 4}) end
 end
 
 local function resetAnimationPack()
