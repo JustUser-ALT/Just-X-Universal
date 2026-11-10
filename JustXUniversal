@@ -101,9 +101,33 @@ end
 local function findPackByOption(option)
     if type(option) ~= "string" then return nil end
     local id = option:match("%[(%d+)%]$")
+        or option:match("[Rr]oblox%.com/bundles/(%d+)")
+        or option:match("/bundles/(%d+)")
+        or option:match("^(%d+)$")
     for _, pack in ipairs(animationPacks) do
         if pack.Id == id then return pack end
     end
+end
+
+local function syncSelectedAnimationPack()
+    if animationPackDropdown and animationPackDropdown.Get then
+        local ok, value = pcall(function() return animationPackDropdown:Get() end)
+        if ok then
+            local found
+            if type(value) == "table" then
+                for option, isSelected in pairs(value) do
+                    if isSelected then
+                        found = findPackByOption(option)
+                        if found then break end
+                    end
+                end
+            else
+                found = findPackByOption(value)
+            end
+            selectedAnimationPack = found
+        end
+    end
+    return selectedAnimationPack
 end
 
 local function classifyAnimationName(name)
@@ -235,11 +259,12 @@ local function watchAnimationCharacter(character)
 end
 
 local function applySelectedAnimationPack()
-    if not selectedAnimationPack then
+    local pack = syncSelectedAnimationPack()
+    if not pack then
         if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Select an Animation Pack first", Type = "Info", Duration = 3}) end
         return
     end
-    local okResolve, resolved = pcall(resolveAnimationPack, selectedAnimationPack.Id)
+    local okResolve, resolved = pcall(resolveAnimationPack, pack.Id)
     if not okResolve then
         warn("[Just X Universal] Animation pack error:", resolved)
         if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
@@ -303,7 +328,17 @@ local animationPackDropdown = AnimationSection:Dropdown({
     MultiSelect = false,
     Flag = "JXU_SelectedAnimationPack",
     Callback = function(value)
-        selectedAnimationPack = findPackByOption(value)
+        if type(value) == "table" then
+            selectedAnimationPack = nil
+            for option, isSelected in pairs(value) do
+                if isSelected then
+                    selectedAnimationPack = findPackByOption(option)
+                    if selectedAnimationPack then break end
+                end
+            end
+        else
+            selectedAnimationPack = findPackByOption(value)
+        end
     end
 })
 
@@ -357,9 +392,10 @@ AnimationSection:Button({
 AnimationSection:Button({
     Name = "Remove Selected Pack",
     Callback = function()
-        if not selectedAnimationPack then return end
+        local packToRemove = syncSelectedAnimationPack()
+        if not packToRemove then return end
         for index, pack in ipairs(animationPacks) do
-            if pack.Id == selectedAnimationPack.Id then
+            if pack.Id == packToRemove.Id then
                 table.remove(animationPacks, index)
                 break
             end
