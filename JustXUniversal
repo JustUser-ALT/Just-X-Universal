@@ -144,23 +144,67 @@ local function classifyAnimationName(name)
     return nil
 end
 
-local ANIMATION_REFERENCE_URL = "https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/animation/using.md"
+local ANIMATION_REFERENCE_URLS = {
+    "https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/animation/using.md",
+    "https://github.com/Roblox/creator-docs/raw/refs/heads/main/content/en-us/animation/using.md"
+}
 local animationReferenceCache
 
 local function normalizeAnimationReferenceName(value)
     return tostring(value or ""):lower():gsub("[^%w]", "")
 end
 
+local function isValidAnimationReference(content)
+    if type(content) ~= "string" or content == "" then return false end
+    local lower = content:lower()
+    return lower:find("catalog animations", 1, true) ~= nil
+        and lower:find("<tr", 1, true) ~= nil
+        and lower:find("<grid item", 1, true) ~= nil
+end
+
+local function downloadAnimationReference()
+    local errors = {}
+    local requestFunction = request or http_request
+    if not requestFunction and syn then
+        requestFunction = syn.request
+    end
+
+    for _, url in ipairs(ANIMATION_REFERENCE_URLS) do
+        if game and game.HttpGet then
+            local okFetch, content = pcall(function()
+                return game:HttpGet(url)
+            end)
+            if okFetch and isValidAnimationReference(content) then
+                return content
+            end
+            table.insert(errors, "HttpGet: " .. (okFetch and "unexpected response format" or tostring(content)))
+        end
+
+        if type(requestFunction) == "function" then
+            local okRequest, response = pcall(function()
+                return requestFunction({Url = url, Method = "GET"})
+            end)
+            local body = type(response) == "table" and (response.Body or response.body)
+            if okRequest and isValidAnimationReference(body) then
+                return body
+            end
+            if not okRequest then
+                table.insert(errors, "request: " .. tostring(response))
+            else
+                local status = type(response) == "table" and (response.StatusCode or response.Status)
+                table.insert(errors, "request: HTTP " .. tostring(status or "unknown") .. " / unexpected response format")
+            end
+        end
+    end
+
+    return nil, #errors > 0 and table.concat(errors, " | ") or "No supported HTTP method is available"
+end
+
 local function getOfficialAnimationReference(bundleId, bundleName)
     if not animationReferenceCache then
-        local okFetch, content = pcall(function()
-            return game:HttpGet(ANIMATION_REFERENCE_URL)
-        end)
-        if not okFetch or type(content) ~= "string" or content == "" then
-            return nil, "Could not download Roblox's official animation reference"
-        end
-        if not content:lower():find("catalog animations", 1, true) or not content:find("<tr", 1, true) then
-            return nil, "Downloaded animation reference has an unexpected format"
+        local content, fetchError = downloadAnimationReference()
+        if not content then
+            return nil, "Could not download Roblox's official animation reference: " .. tostring(fetchError)
         end
         animationReferenceCache = content
     end
@@ -178,7 +222,7 @@ local function getOfficialAnimationReference(bundleId, bundleName)
     for row in section:gmatch("<tr[^>]*>(.-)</tr>") do
         local nameCell, animationCell = row:match("<td[^>]*>(.-)</td>%s*<td[^>]*>(.-)</td>")
         if nameCell and animationCell then
-            local rowBundleId = nameCell:match("[Rr]oblox%.com/bundles/(%d+)")
+            local rowBundleId = nameCell:lower():match("roblox%.com/bundles/(%d+)")
             local plainName = nameCell:gsub("<[^>]->", " "):gsub("%*%*", ""):gsub("&nbsp;", " ")
             local rowKey = normalizeAnimationReferenceName(plainName)
             local matchesId = rowBundleId and rowBundleId == targetBundleId
@@ -188,7 +232,7 @@ local function getOfficialAnimationReference(bundleId, bundleName)
                 local map = {}
                 for animationBlock in animationCell:gmatch("<Grid item[^>]*>(.-)</Grid>") do
                     local label = animationBlock:match("%*%*(.-)%*%*")
-                    local assetId = animationBlock:match("(%d+)")
+                    local assetId = animationBlock:match("<br%s*/>%s*(%d+)")
                     if label and assetId then
                         local slot = normalizeAnimationReferenceName(label)
                         if slot == "swimidle" then
