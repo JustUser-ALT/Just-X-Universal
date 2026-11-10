@@ -145,14 +145,14 @@ local function classifyAnimationName(name)
     return nil
 end
 
-local ANIMATION_REFERENCE_URL = "https://create.roblox.com/docs/animation/using.md"
+local ANIMATION_REFERENCE_URL = "https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/animation/using.md"
 local animationReferenceCache
 
 local function normalizeAnimationReferenceName(value)
     return tostring(value or ""):lower():gsub("[^%w]", "")
 end
 
-local function getOfficialAnimationReference(bundleName)
+local function getOfficialAnimationReference(bundleId, bundleName)
     if not animationReferenceCache then
         local okFetch, content = pcall(function()
             return game:HttpGet(ANIMATION_REFERENCE_URL)
@@ -160,25 +160,32 @@ local function getOfficialAnimationReference(bundleName)
         if not okFetch or type(content) ~= "string" or content == "" then
             return nil, "Could not download Roblox's official animation reference"
         end
+        if not content:lower():find("catalog animations", 1, true) or not content:find("<tr", 1, true) then
+            return nil, "Downloaded animation reference has an unexpected format"
+        end
         animationReferenceCache = content
     end
 
     local lowerContent = animationReferenceCache:lower()
     local sectionStart = lowerContent:find("catalog animations", 1, true)
     if not sectionStart then
-        return nil, "Catalog animation section was not found in Roblox documentation"
+        return nil, "Catalog animation section was not found in Roblox's official source"
     end
 
     local section = animationReferenceCache:sub(sectionStart)
+    local targetBundleId = tostring(bundleId)
     local bundleKey = normalizeAnimationReferenceName(bundleName)
 
     for row in section:gmatch("<tr[^>]*>(.-)</tr>") do
         local nameCell, animationCell = row:match("<td[^>]*>(.-)</td>%s*<td[^>]*>(.-)</td>")
         if nameCell and animationCell then
+            local rowBundleId = nameCell:match("[Rr]oblox%.com/bundles/(%d+)")
             local plainName = nameCell:gsub("<[^>]->", " "):gsub("%*%*", ""):gsub("&nbsp;", " ")
             local rowKey = normalizeAnimationReferenceName(plainName)
+            local matchesId = rowBundleId and rowBundleId == targetBundleId
+            local matchesName = #rowKey >= 4 and bundleKey ~= "" and (bundleKey:find(rowKey, 1, true) or rowKey:find(bundleKey, 1, true))
 
-            if #rowKey >= 4 and (bundleKey:find(rowKey, 1, true) or rowKey:find(bundleKey, 1, true)) then
+            if matchesId or (not rowBundleId and matchesName) then
                 local map = {}
                 for animationBlock in animationCell:gmatch("<Grid item[^>]*>(.-)</Grid>") do
                     local label = animationBlock:match("%*%*(.-)%*%*")
@@ -202,7 +209,7 @@ local function getOfficialAnimationReference(bundleName)
         end
     end
 
-    return nil, "This pack is not listed in Roblox's official catalog animation reference"
+    return nil, "Bundle " .. targetBundleId .. " (" .. tostring(bundleName) .. ") is not listed in Roblox's official catalog animation reference"
 end
 
 local function resolveAnimationPack(bundleId)
@@ -213,22 +220,17 @@ local function resolveAnimationPack(bundleId)
     local bundleType = tostring(details.BundleType or "")
     local packName = tostring(details.Name or ("Animation Pack " .. bundleId))
 
-    local map, referenceError = getOfficialAnimationReference(packName)
+    local map, referenceError = getOfficialAnimationReference(bundleId, packName)
+    if not map then
+        error(tostring(referenceError) .. "; unsupported bundles will not be applied using unverified item IDs")
+    end
     local returnedItems = {}
     local source = "Roblox official catalog reference"
-    if not map then
-        map = {}
-        source = "Bundle item IDs (official reference unavailable)"
-        for _, item in ipairs(details.Items) do
-            local itemName = tostring(item.Name or "Unnamed")
-            local itemType = tostring(item.Type or "?")
-            local assetType = tostring(item.AssetType or "?")
-            table.insert(returnedItems, itemName .. " [" .. itemType .. "/" .. assetType .. "]")
-            if item.Type == "Asset" and tonumber(item.Id) then
-                local slot = classifyAnimationName(itemName)
-                if slot then map[slot] = tostring(item.Id) end
-            end
-        end
+    for _, item in ipairs(details.Items) do
+        local itemName = tostring(item.Name or "Unnamed")
+        local itemType = tostring(item.Type or "?")
+        local assetType = tostring(item.AssetType or "?")
+        table.insert(returnedItems, itemName .. " [" .. itemType .. "/" .. assetType .. "]")
     end
 
     if next(map) == nil then
