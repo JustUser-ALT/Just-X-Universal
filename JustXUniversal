@@ -250,7 +250,8 @@ local function resolveAnimationPack(bundleId)
     local bundleType = tostring(details.BundleType or "")
     local packName = tostring(details.Name or ("Animation Pack " .. bundleId))
 
-    local map, returnedItems = getOfficialAnimationReference(packName)
+    local map, referenceError = getOfficialAnimationReference(packName)
+    local returnedItems = {}
     local source = "Roblox official catalog reference"
     if not map then
         map = {}
@@ -269,7 +270,7 @@ local function resolveAnimationPack(bundleId)
 
     if next(map) == nil then
         local summary = #returnedItems > 0 and table.concat(returnedItems, ", ") or "Items are empty"
-        error("No animation slots recognized. BundleType=" .. bundleType .. "; " .. summary)
+        error("No animation slots recognized. BundleType=" .. bundleType .. "; " .. summary .. "; reference: " .. tostring(referenceError))
     end
     return {
         Id = tostring(bundleId),
