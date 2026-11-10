@@ -131,6 +131,7 @@ local ok, err = pcall(function()
     end
     log("Stopped matching old locomotion tracks: " .. tostring(stopped))
 
+    applied = true
     for _, target in ipairs(targets) do
         target.Object.AnimationId = target.NewId
         log(target.Name .. " applied: " .. target.Object.AnimationId)
@@ -140,7 +141,6 @@ local ok, err = pcall(function()
     animate.Disabled = true
     task.wait(0.1)
     animate.Disabled = originalEnabled
-    applied = true
 
     log("Applied Idle (both variants), Walk and Run.")
     log("Keep moving/standing to trigger the states. Test window: " .. TEST_DURATION .. " seconds.")
