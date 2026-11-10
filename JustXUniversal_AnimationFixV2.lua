@@ -1,0 +1,1382 @@
+-- Just X Universal
+warn("[Just X Universal] Animation fix build: CARTOONY-742-V2")
+-- Built on JustLib (Grid layout, 3 columns)
+-- Features: Character, Visual, Misc
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
+local LocalPlayer = Players.LocalPlayer
+
+local LIBRARY_URL = "https://raw.githubusercontent.com/JustUser-ALT/JustXLibrary/main/JustLib.lua"
+local ok, JL = pcall(function()
+    return loadstring(game:HttpGet(LIBRARY_URL))()
+end)
+if not ok or type(JL) ~= "table" or type(JL.Window) ~= "function" then
+    warn("[Just X Universal] JustLib failed to load:", JL)
+    return
+end
+
+local Window = JL:Window({
+    Title = "Just X Universal",
+    Columns = 3,
+    Width = 760,
+    Height = 470
+})
+
+local Main = Window:Tab({
+    Name = "Main",
+    Icon = "house",
+    Type = "Grid"
+})
+
+local Antimations = Window:Tab({
+    Name = "Antimations",
+    Icon = "audio-lines",
+    Type = "Grid"
+})
+
+--==================================================
+-- ANIMATION PACKS
+--==================================================
+
+local AnimationSection = Antimations:Section({Title = "Animation Packs", Column = 1})
+local AssetService = game:GetService("AssetService")
+local HttpService = game:GetService("HttpService")
+local animationPacks = {}
+local selectedAnimationPack
+local activeAnimationMap = {}
+local originalAnimationIds = setmetatable({}, {__mode = "k"})
+local animationApplyQueued = false
+local animationRestartedCharacters = setmetatable({}, {__mode = "k"})
+local ANIMATION_CONFIG = "JustXUniversal_AnimationPacks.json"
+
+local animationSlots = {
+    idle = {"idle"},
+    walk = {"walk"},
+    run = {"run"},
+    jump = {"jump"},
+    fall = {"fall"},
+    climb = {"climb"},
+    swim = {"swim"},
+    swimidle = {"swimidle"}
+}
+
+local function loadAnimationPackConfig()
+    if type(isfile) ~= "function" or type(readfile) ~= "function" then return end
+    local okRead, raw = pcall(function()
+        if not isfile(ANIMATION_CONFIG) then return nil end
+        return readfile(ANIMATION_CONFIG)
+    end)
+    if not okRead or type(raw) ~= "string" or raw == "" then return end
+    local okDecode, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+    if okDecode and type(decoded) == "table" then
+        for _, pack in ipairs(decoded) do
+            if type(pack) == "table" and tonumber(pack.Id) then
+                table.insert(animationPacks, {
+                    Id = tostring(pack.Id),
+                    Name = tostring(pack.Name or ("Animation Pack " .. pack.Id))
+                })
+            end
+        end
+    end
+end
+
+local function saveAnimationPackConfig()
+    if type(writefile) ~= "function" then return false end
+    local okSave = pcall(function()
+        writefile(ANIMATION_CONFIG, HttpService:JSONEncode(animationPacks))
+    end)
+    return okSave
+end
+
+local function getAnimationPackNames()
+    local names = {}
+    for _, pack in ipairs(animationPacks) do
+        table.insert(names, pack.Name .. "  [" .. pack.Id .. "]")
+    end
+    return names
+end
+
+local function findPackByOption(option)
+    if type(option) ~= "string" then return nil end
+    local id = option:match("%[(%d+)%]$")
+        or option:match("[Rr]oblox%.com/bundles/(%d+)")
+        or option:match("/bundles/(%d+)")
+        or option:match("^(%d+)$")
+    for _, pack in ipairs(animationPacks) do
+        if pack.Id == id then return pack end
+    end
+end
+
+local function syncSelectedAnimationPack()
+    if animationPackDropdown and animationPackDropdown.Get then
+        local ok, value = pcall(function() return animationPackDropdown:Get() end)
+        if ok then
+            local found
+            if type(value) == "table" then
+                for option, isSelected in pairs(value) do
+                    if isSelected then
+                        found = findPackByOption(option)
+                        if found then break end
+                    end
+                end
+            else
+                found = findPackByOption(value)
+            end
+            selectedAnimationPack = found
+        end
+    end
+    return selectedAnimationPack
+end
+
+local function classifyAnimationName(name)
+    local normalized = tostring(name):lower():gsub("[%s_%-]", "")
+    if normalized:find("swimidle", 1, true) or normalized:find("swimmingidle", 1, true) then return "swimidle" end
+    if normalized:find("idle", 1, true) then return "idle" end
+    if normalized:find("walk", 1, true) then return "walk" end
+    if normalized:find("run", 1, true) then return "run" end
+    if normalized:find("jump", 1, true) then return "jump" end
+    if normalized:find("fall", 1, true) then return "fall" end
+    if normalized:find("climb", 1, true) then return "climb" end
+    if normalized:find("swim", 1, true) then return "swim" end
+    return nil
+end
+
+local function resolveAnimationPack(bundleId)
+    local details = AssetService:GetBundleDetailsAsync(tonumber(bundleId))
+    if type(details) ~= "table" or type(details.Items) ~= "table" then
+        error("Roblox returned invalid bundle details")
+    end
+    local bundleType = tostring(details.BundleType or "")
+
+    local map, returnedItems = {}, {}
+    for _, item in ipairs(details.Items) do
+        local itemName = tostring(item.Name or "Unnamed")
+        local itemType = tostring(item.Type or "?")
+        local assetType = tostring(item.AssetType or "?")
+        table.insert(returnedItems, itemName .. " [" .. itemType .. "/" .. assetType .. "]")
+        if item.Type == "Asset" and tonumber(item.Id) then
+            local slot = classifyAnimationName(itemName)
+            if slot then map[slot] = tostring(item.Id) end
+        end
+    end
+    -- Roblox's legacy Cartoony bundle entries expose catalog item IDs (837...),
+    -- but the playable animation clip IDs are the canonical 742... assets.
+    if tostring(bundleId) == "56" then
+        map = {
+            run = "742638842",
+            walk = "742640026",
+            jump = "742637942",
+            idle = "742637544",
+            fall = "742637151",
+            swim = "742639220",
+            swimidle = "742639812",
+            climb = "742636889"
+        }
+    end
+
+    if next(map) == nil then
+        local summary = #returnedItems > 0 and table.concat(returnedItems, ", ") or "Items is empty"
+        error("No animation slots recognized. BundleType=" .. bundleType .. "; returned: " .. summary)
+    end
+    return {
+        Id = tostring(bundleId),
+        Name = tostring(details.Name or ("Animation Pack " .. bundleId)),
+        Animations = map
+    }
+end
+
+local function findAnimationTargetSlot(animationObject)
+    local current = animationObject
+    local names = {}
+    while current and current.Name ~= "Animate" do
+        table.insert(names, 1, current.Name:lower())
+        current = current.Parent
+    end
+    local path = table.concat(names, "/")
+    if path:find("swimidle", 1, true) then return "swimidle" end
+    if path:find("swim", 1, true) then return "swim" end
+    if path:find("idle", 1, true) then return "idle" end
+    for slot in pairs(animationSlots) do
+        if slot ~= "idle" and path:find(slot, 1, true) then return slot end
+    end
+end
+
+local function captureOriginalAnimationIds(animate)
+    for _, object in ipairs(animate:GetDescendants()) do
+        if object:IsA("Animation") and originalAnimationIds[object] == nil then
+            originalAnimationIds[object] = object.AnimationId
+        end
+    end
+end
+
+local function restartAnimateOnce(character, animate)
+    if not character or not animate or not animate:IsA("LocalScript") then return false end
+    if animationRestartedCharacters[character] then return false end
+
+    animationRestartedCharacters[character] = true
+    local wasDisabled = animate.Disabled
+    animate.Disabled = true
+    task.defer(function()
+        if animate.Parent then
+            animate.Disabled = wasDisabled
+        end
+    end)
+    return true
+end
+
+local function applyAnimationMap(restartAnimate)
+    local character = LocalPlayer.Character
+    if not character then return false end
+    local animate = character:FindFirstChild("Animate")
+    if not animate then return false end
+
+    captureOriginalAnimationIds(animate)
+    local changed = false
+    for _, object in ipairs(animate:GetDescendants()) do
+        if object:IsA("Animation") then
+            local slot = findAnimationTargetSlot(object)
+            local assetId = slot and activeAnimationMap[slot]
+            if assetId then
+                local content = "rbxassetid://" .. assetId
+                if object.AnimationId ~= content then
+                    object.AnimationId = content
+                    changed = true
+                end
+            end
+        end
+    end
+
+    if changed and restartAnimate then
+        restartAnimateOnce(character, animate)
+    end
+    return changed
+end
+
+local function queueAnimationReapply(restartAnimate)
+    if animationApplyQueued then return end
+    animationApplyQueued = true
+    task.defer(function()
+        animationApplyQueued = false
+        applyAnimationMap(restartAnimate)
+    end)
+end
+
+local function watchAnimationCharacter(character)
+    task.spawn(function()
+        local animate = character:WaitForChild("Animate", 10)
+        if not animate then return end
+
+        task.wait(0.35)
+        if character ~= LocalPlayer.Character or not animate.Parent then return end
+        applyAnimationMap(true)
+
+        animate.DescendantAdded:Connect(function(object)
+            if object:IsA("Animation") then
+                task.defer(function()
+                    if character == LocalPlayer.Character then
+                        applyAnimationMap(false)
+                    end
+                end)
+            end
+        end)
+    end)
+end
+
+local function applySelectedAnimationPack()
+    local pack = syncSelectedAnimationPack()
+    if not pack then
+        if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Select an Animation Pack first", Type = "Info", Duration = 3}) end
+        return
+    end
+    local okResolve, resolved = pcall(resolveAnimationPack, pack.Id)
+    if not okResolve then
+        warn("[Just X Universal] Animation pack error:", resolved)
+        if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
+        return
+    end
+    local character = LocalPlayer.Character
+    local animate = character and character:FindFirstChild("Animate")
+    if animate then captureOriginalAnimationIds(animate) end
+    activeAnimationMap = resolved.Animations
+    queueAnimationReapply(true)
+    if JL.Notify then
+        JL:Notify({Title = "Antimations", Desc = "Applied " .. resolved.Name, Type = "Success", Duration = 4}) end
+end
+
+local function resetAnimationPack()
+    activeAnimationMap = {}
+    local character = LocalPlayer.Character
+    local animate = character and character:FindFirstChild("Animate")
+    if animate then
+        local changed = false
+        for _, object in ipairs(animate:GetDescendants()) do
+            if object:IsA("Animation") then
+                local originalId = originalAnimationIds[object]
+                if originalId ~= nil and object.AnimationId ~= originalId then
+                    object.AnimationId = originalId
+                    changed = true
+                end
+            end
+        end
+        if changed then
+            restartAnimateOnce(character, animate)
+        end
+    end
+    if JL.Notify then
+        JL:Notify({Title = "Antimations", Desc = "Original character animations restored", Type = "Success", Duration = 4})
+    end
+end
+
+loadAnimationPackConfig()
+
+local animationPackInput = AnimationSection:Input({
+    Name = "Animation Pack ID / Link",
+    Placeholder = "Paste Bundle ID or Roblox URL",
+    Flag = "JXU_AnimationPackInput"
+})
+
+local animationPackNameInput = AnimationSection:Input({
+    Name = "Custom Pack Name (Optional)",
+    Placeholder = "Leave empty to use Roblox name",
+    Flag = "JXU_AnimationPackNameInput"
+})
+
+local animationPackDropdown = AnimationSection:Dropdown({
+    Name = "Saved Packs",
+    Options = getAnimationPackNames,
+    Search = true,
+    MultiSelect = false,
+    Flag = "JXU_SelectedAnimationPack",
+    Callback = function(value)
+        if type(value) == "table" then
+            selectedAnimationPack = nil
+            for option, isSelected in pairs(value) do
+                if isSelected then
+                    selectedAnimationPack = findPackByOption(option)
+                    if selectedAnimationPack then break end
+                end
+            end
+        else
+            selectedAnimationPack = findPackByOption(value)
+        end
+    end
+})
+
+AnimationSection:Button({
+    Name = "Add Animation Pack",
+    Callback = function()
+        local rawInput = tostring(animationPackInput:Get() or ""):match("^%s*(.-)%s*$")
+        local bundleId
+        if rawInput:match("^%d+$") then
+            bundleId = rawInput
+        else
+            bundleId = rawInput:match("[Rr]oblox%.com/bundles/(%d+)")
+                or rawInput:match("/bundles/(%d+)")
+        end
+        if not bundleId then
+            if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Enter a Bundle ID or a valid Roblox bundle link", Type = "Error", Duration = 3}) end
+            return
+        end
+        for _, existing in ipairs(animationPacks) do
+            if existing.Id == bundleId then
+                if JL.Notify then JL:Notify({Title = "Antimations", Desc = "This pack is already saved", Type = "Info", Duration = 3}) end
+                return
+            end
+        end
+        local okResolve, resolved = pcall(resolveAnimationPack, bundleId)
+        if not okResolve then
+            if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
+            return
+        end
+        local customName = tostring(animationPackNameInput:Get() or ""):match("^%s*(.-)%s*$")
+        local savedName = customName ~= "" and customName or resolved.Name
+        table.insert(animationPacks, {Id = resolved.Id, Name = savedName})
+        saveAnimationPackConfig()
+        if animationPackDropdown and animationPackDropdown.Refresh then
+            animationPackDropdown:Refresh()
+        end
+        if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Saved: " .. resolved.Name, Type = "Success", Duration = 4}) end
+    end
+})
+
+AnimationSection:Button({
+    Name = "Apply Selected Pack",
+    Callback = applySelectedAnimationPack
+})
+
+AnimationSection:Button({
+    Name = "Reset Animation",
+    Callback = resetAnimationPack
+})
+
+AnimationSection:Button({
+    Name = "Remove Selected Pack",
+    Callback = function()
+        local packToRemove = syncSelectedAnimationPack()
+        if not packToRemove then return end
+        for index, pack in ipairs(animationPacks) do
+            if pack.Id == packToRemove.Id then
+                table.remove(animationPacks, index)
+                break
+            end
+        end
+        selectedAnimationPack = nil
+        saveAnimationPackConfig()
+        if animationPackDropdown and animationPackDropdown.Refresh then
+            animationPackDropdown:Refresh()
+        end
+    end
+})
+
+LocalPlayer.CharacterAdded:Connect(watchAnimationCharacter)
+if LocalPlayer.Character then watchAnimationCharacter(LocalPlayer.Character) end
+
+
+--==================================================
+-- CHARACTER
+--==================================================
+
+local Character = Main:Section({Title = "Character", Column = 1})
+local WalkSpeedValue = 16
+local JumpPowerValue = 50
+local speedEnabled = false
+local jumpEnabled = false
+local movementOriginals = {}
+local speedConn
+local jumpConn
+
+local function getHumanoid()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function applyMovement()
+    local hum = getHumanoid()
+    if not hum then return end
+    if speedEnabled then hum.WalkSpeed = WalkSpeedValue end
+    if jumpEnabled then
+        if hum.UseJumpPower then hum.JumpPower = JumpPowerValue
+        else hum.JumpHeight = math.max(1, JumpPowerValue / 3) end
+    end
+end
+
+Character:Slider({
+    Name = "Walk Speed",
+    Min = 1,
+    Max = 250,
+    Step = 1,
+    Default = 16,
+    Flag = "JXU_WalkSpeed",
+    Callback = function(value)
+        WalkSpeedValue = value
+        if speedEnabled then applyMovement() end
+    end
+})
+
+Character:Toggle({
+    Name = "Enable Walk Speed",
+    Default = false,
+    Flag = "JXU_WalkSpeedEnabled",
+    Callback = function(enabled)
+        speedEnabled = enabled
+        local hum = getHumanoid()
+        if hum then
+            if enabled then
+                if movementOriginals.Humanoid ~= hum then
+                    movementOriginals = {Humanoid = hum, WalkSpeed = hum.WalkSpeed, JumpPower = hum.JumpPower, JumpHeight = hum.JumpHeight}
+                end
+                hum.WalkSpeed = WalkSpeedValue
+            elseif movementOriginals.Humanoid == hum then
+                hum.WalkSpeed = movementOriginals.WalkSpeed or 16
+            end
+        end
+    end
+})
+
+Character:Slider({
+    Name = "Jump Power",
+    Min = 1,
+    Max = 250,
+    Step = 1,
+    Default = 50,
+    Flag = "JXU_JumpPower",
+    Callback = function(value)
+        JumpPowerValue = value
+        if jumpEnabled then applyMovement() end
+    end
+})
+
+Character:Toggle({
+    Name = "Enable Jump Power",
+    Default = false,
+    Flag = "JXU_JumpPowerEnabled",
+    Callback = function(enabled)
+        jumpEnabled = enabled
+        local hum = getHumanoid()
+        if hum then
+            if movementOriginals.Humanoid ~= hum then
+                movementOriginals = {Humanoid = hum, WalkSpeed = hum.WalkSpeed, JumpPower = hum.JumpPower, JumpHeight = hum.JumpHeight}
+            end
+            if enabled then
+                if hum.UseJumpPower then hum.JumpPower = JumpPowerValue
+                else hum.JumpHeight = math.max(1, JumpPowerValue / 3) end
+            else
+                hum.JumpPower = movementOriginals.JumpPower or 50
+                hum.JumpHeight = movementOriginals.JumpHeight or 7.2
+            end
+        end
+    end
+})
+
+-- Fly uses Humanoid.MoveDirection, so the normal keyboard/thumbstick remains in use.
+local flyEnabled = false
+local flySpeed = 65
+local flyVelocity
+local flyGyro
+local flyAttachment
+local flyConn
+local oldAutoRotate
+local oldPlatformStand
+local oldAnimateDisabled
+local flyTracks = {}
+
+local function stopFly()
+    if flyConn then flyConn:Disconnect(); flyConn = nil end
+    if flyVelocity then flyVelocity:Destroy(); flyVelocity = nil end
+    if flyGyro then flyGyro:Destroy(); flyGyro = nil end
+    if flyAttachment then flyAttachment:Destroy(); flyAttachment = nil end
+
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if oldAutoRotate ~= nil then hum.AutoRotate = oldAutoRotate end
+        if oldPlatformStand ~= nil then hum.PlatformStand = oldPlatformStand end
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        for _, track in ipairs(flyTracks) do pcall(function() track:Stop(0.12) end) end
+    end
+    flyTracks = {}
+    local animate = char and char:FindFirstChild("Animate")
+    if animate and oldAnimateDisabled ~= nil then animate.Disabled = oldAnimateDisabled end
+    oldAutoRotate, oldPlatformStand, oldAnimateDisabled = nil, nil, nil
+end
+
+local function startFly()
+    stopFly()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+
+    oldAutoRotate = hum.AutoRotate
+    oldPlatformStand = hum.PlatformStand
+    hum.AutoRotate = false
+    hum.PlatformStand = false
+
+    local animate = char:FindFirstChild("Animate")
+    if animate then
+        oldAnimateDisabled = animate.Disabled
+        animate.Disabled = true
+    end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            table.insert(flyTracks, track)
+            pcall(function() track:Stop(0.1) end)
+        end
+    end
+
+    flyAttachment = Instance.new("Attachment")
+    flyAttachment.Name = "JXU_FlyAttachment"
+    flyAttachment.Parent = root
+
+    flyVelocity = Instance.new("LinearVelocity")
+    flyVelocity.Name = "JXU_FlyVelocity"
+    flyVelocity.Attachment0 = flyAttachment
+    flyVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    flyVelocity.MaxForce = math.huge
+    flyVelocity.VectorVelocity = Vector3.zero
+    flyVelocity.Parent = root
+
+    flyGyro = Instance.new("AlignOrientation")
+    flyGyro.Name = "JXU_FlyOrientation"
+    flyGyro.Attachment0 = flyAttachment
+    flyGyro.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    flyGyro.MaxTorque = math.huge
+    flyGyro.Responsiveness = 18
+    flyGyro.Parent = root
+
+    flyConn = RunService.RenderStepped:Connect(function()
+        if not flyEnabled or not root.Parent or not hum.Parent then return end
+        local camera = workspace.CurrentCamera
+        if not camera then return end
+
+        local move = hum.MoveDirection
+        local direction = Vector3.zero
+        if move.Magnitude > 0.05 then
+            direction = camera.CFrame:VectorToWorldSpace(Vector3.new(
+                move:Dot(camera.CFrame.RightVector),
+                0,
+                -move:Dot(camera.CFrame.LookVector)
+            ))
+            if direction.Magnitude > 0 then direction = direction.Unit end
+        end
+
+        local vertical = 0
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vertical += 1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then vertical -= 1 end
+
+        -- Mobile jump button gives a short upward lift; the normal thumbstick controls horizontal motion.
+        flyVelocity.VectorVelocity = direction * flySpeed + Vector3.new(0, vertical * flySpeed, 0)
+        local look = Vector3.new(camera.CFrame.LookVector.X, 0, camera.CFrame.LookVector.Z)
+        if look.Magnitude > 0.01 then
+            flyGyro.CFrame = CFrame.lookAt(root.Position, root.Position + look.Unit)
+        end
+    end)
+end
+
+Character:Slider({
+    Name = "Fly Speed",
+    Min = 10,
+    Max = 200,
+    Step = 1,
+    Default = 65,
+    Flag = "JXU_FlySpeed",
+    Callback = function(value) flySpeed = value end
+})
+
+Character:Toggle({
+    Name = "Fly",
+    Default = false,
+    Flag = "JXU_Fly",
+    Callback = function(enabled)
+        flyEnabled = enabled
+        if enabled then startFly() else stopFly() end
+    end
+})
+
+Character:Divider({Label = "Movement"})
+
+local noclipEnabled = false
+local noclipConn
+local collisionCache = {}
+
+local function restoreCollision()
+    for part, old in pairs(collisionCache) do
+        if part and part.Parent then part.CanCollide = old end
+    end
+    table.clear(collisionCache)
+end
+
+local function setNoclip(enabled)
+    noclipEnabled = enabled
+    if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
+    if not enabled then restoreCollision(); return end
+
+    noclipConn = RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if collisionCache[part] == nil then collisionCache[part] = part.CanCollide end
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+Character:Toggle({
+    Name = "Noclip",
+    Default = false,
+    Flag = "JXU_Noclip",
+    Callback = setNoclip
+})
+
+local infinityJump = false
+Character:Toggle({
+    Name = "Infinity Jump",
+    Default = false,
+    Flag = "JXU_InfinityJump",
+    Callback = function(enabled) infinityJump = enabled end
+})
+
+UserInputService.JumpRequest:Connect(function()
+    if not infinityJump then return end
+    local hum = getHumanoid()
+    if hum and hum.Health > 0 then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+local autoJumpOriginal
+Character:Toggle({
+    Name = "Disable Auto Jump",
+    Default = false,
+    Flag = "JXU_DisableAutoJump",
+    Callback = function(enabled)
+        local hum = getHumanoid()
+        if not hum then return end
+        if enabled then
+            if autoJumpOriginal == nil then autoJumpOriginal = hum.AutoJumpEnabled end
+            hum.AutoJumpEnabled = false
+        else
+            hum.AutoJumpEnabled = autoJumpOriginal ~= nil and autoJumpOriginal or true
+            autoJumpOriginal = nil
+        end
+    end
+})
+
+--==================================================
+-- VISUAL
+--==================================================
+
+local Visual = Main:Section({Title = "Visual", Column = 2})
+
+local fullbrightEnabled = false
+local fullbrightSnapshot
+local fullbrightConn
+local function setFullbright(enabled)
+    fullbrightEnabled = enabled
+    if fullbrightConn then fullbrightConn:Disconnect(); fullbrightConn = nil end
+    if enabled then
+        fullbrightSnapshot = {
+            Ambient = Lighting.Ambient,
+            OutdoorAmbient = Lighting.OutdoorAmbient,
+            Brightness = Lighting.Brightness,
+            GlobalShadows = Lighting.GlobalShadows
+        }
+        local function apply()
+            Lighting.Ambient = Color3.fromRGB(170, 170, 170)
+            Lighting.OutdoorAmbient = Color3.fromRGB(170, 170, 170)
+            Lighting.Brightness = 2
+            Lighting.GlobalShadows = false
+        end
+        apply()
+        fullbrightConn = RunService.Heartbeat:Connect(function()
+            if fullbrightEnabled then apply() end
+        end)
+    else
+        if fullbrightSnapshot then
+            Lighting.Ambient = fullbrightSnapshot.Ambient
+            Lighting.OutdoorAmbient = fullbrightSnapshot.OutdoorAmbient
+            Lighting.Brightness = fullbrightSnapshot.Brightness
+            Lighting.GlobalShadows = fullbrightSnapshot.GlobalShadows
+        end
+        fullbrightSnapshot = nil
+    end
+end
+
+Visual:Toggle({
+    Name = "Fullbright",
+    Default = false,
+    Flag = "JXU_Fullbright",
+    Callback = setFullbright
+})
+
+local fogEnabled = false
+local fogSnapshot
+local atmosphereSnapshots = {}
+local function setRemoveFog(enabled)
+    fogEnabled = enabled
+    if enabled then
+        fogSnapshot = {FogStart = Lighting.FogStart, FogEnd = Lighting.FogEnd}
+        table.clear(atmosphereSnapshots)
+        for _, obj in ipairs(Lighting:GetChildren()) do
+            if obj:IsA("Atmosphere") then
+                atmosphereSnapshots[obj] = {Density = obj.Density, Haze = obj.Haze, Glare = obj.Glare}
+            end
+        end
+        Lighting.FogStart = 0
+        Lighting.FogEnd = 1000000
+        for obj in pairs(atmosphereSnapshots) do
+            if obj.Parent then obj.Density = 0; obj.Haze = 0; obj.Glare = 0 end
+        end
+    else
+        if fogSnapshot then
+            Lighting.FogStart = fogSnapshot.FogStart
+            Lighting.FogEnd = fogSnapshot.FogEnd
+        end
+        for obj, values in pairs(atmosphereSnapshots) do
+            if obj.Parent then
+                obj.Density = values.Density
+                obj.Haze = values.Haze
+                obj.Glare = values.Glare
+            end
+        end
+        fogSnapshot = nil
+        table.clear(atmosphereSnapshots)
+    end
+end
+
+Visual:Toggle({
+    Name = "Remove Fog",
+    Default = false,
+    Flag = "JXU_RemoveFog",
+    Callback = setRemoveFog
+})
+
+local espEnabled = false
+local espAllPlayers = false
+local espTargets = {}
+local highlights = {}
+local characterConnections = {}
+local espDropdown
+
+local function removeHighlight(player)
+    local h = highlights[player]
+    if h then pcall(function() h:Destroy() end); highlights[player] = nil end
+end
+
+local function shouldHighlight(player)
+    return espEnabled and player ~= LocalPlayer and (espAllPlayers or espTargets[player.UserId] == true)
+end
+
+local function addHighlight(player, character)
+    removeHighlight(player)
+    if not shouldHighlight(player) or not character then return end
+    local h = Instance.new("Highlight")
+    h.Name = "JXU_PlayerESP"
+    h.Adornee = character
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.FillTransparency = 1
+    h.OutlineTransparency = 0.05
+    h.OutlineColor = Color3.fromRGB(90, 175, 255)
+    h.Parent = character
+    highlights[player] = h
+end
+
+local function updatePlayerESP(player)
+    if shouldHighlight(player) then
+        if player.Character then addHighlight(player, player.Character) end
+    else
+        removeHighlight(player)
+    end
+end
+
+local function watchPlayer(player)
+    if characterConnections[player] then characterConnections[player]:Disconnect() end
+    characterConnections[player] = player.CharacterAdded:Connect(function(character)
+        task.wait(0.25)
+        if character.Parent then updatePlayerESP(player) end
+    end)
+    updatePlayerESP(player)
+end
+
+local function getESPOptions()
+    local options = {"All", {Divider = true}}
+    local players = Players:GetPlayers()
+    table.sort(players, function(a,b) return a.Name:lower() < b.Name:lower() end)
+    for _, player in ipairs(players) do
+        if player ~= LocalPlayer then table.insert(options, player.Name) end
+    end
+    return options
+end
+
+local function applyESPSelection(selection)
+    selection = type(selection) == "table" and selection or {}
+    local all, chosen = false, {}
+    for _, name in ipairs(selection) do
+        if name == "All" then all = true else chosen[name] = true end
+    end
+
+    if all and next(chosen) == nil then
+        espAllPlayers = true
+        table.clear(espTargets)
+    else
+        espAllPlayers = false
+        table.clear(espTargets)
+        for _, player in ipairs(Players:GetPlayers()) do
+            if chosen[player.Name] then espTargets[player.UserId] = true end
+        end
+    end
+
+    espEnabled = espAllPlayers or next(espTargets) ~= nil
+    for _, player in ipairs(Players:GetPlayers()) do updatePlayerESP(player) end
+
+    -- Selecting a named player while All is marked switches to individual mode.
+    if all and next(chosen) ~= nil and espDropdown then
+        local names = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and chosen[player.Name] then table.insert(names, player.Name) end
+        end
+        espDropdown:Set(names)
+    end
+end
+
+espDropdown = Visual:Dropdown({
+    Name = "ESP",
+    Options = getESPOptions,
+    MultiSelect = true,
+    Search = true,
+    AutoUpdate = true,
+    Interval = 3,
+    Flag = "JXU_ESPPlayers",
+    Callback = applyESPSelection
+})
+
+Players.PlayerAdded:Connect(function(player)
+    if espEnabled then watchPlayer(player) end
+end)
+Players.PlayerRemoving:Connect(function(player)
+    removeHighlight(player)
+    if characterConnections[player] then characterConnections[player]:Disconnect(); characterConnections[player] = nil end
+end)
+
+--==================================================
+-- MISC
+--==================================================
+
+local Misc = Main:Section({Title = "Misc", Column = 3})
+
+Misc:Slider({
+    Name = "Max Zoom",
+    Min = 1,
+    Max = 10000,
+    Step = 1,
+    Default = math.clamp(LocalPlayer.CameraMaxZoomDistance, 1, 10000),
+    Flag = "JXU_MaxZoom",
+    Callback = function(value)
+        LocalPlayer.CameraMaxZoomDistance = value
+    end
+})
+
+-- Custom leaderboard. Roblox does not expose other players' Backpack contents
+-- to ordinary clients; only visible/equipped tools can be listed reliably.
+local leaderboardEnabled = false
+local leaderboardGui
+local expanded = {}
+local playerWatchers = {}
+local refreshPending = false
+local oldPlayerListEnabled = true
+
+local LB = {
+    bg = Color3.fromRGB(22, 24, 31),
+    row = Color3.fromRGB(34, 37, 47),
+    text = Color3.fromRGB(240, 242, 248),
+    muted = Color3.fromRGB(155, 163, 180),
+    accent = Color3.fromRGB(105, 150, 255),
+    border = Color3.fromRGB(65, 72, 91)
+}
+
+local function newGui(className, props, parent)
+    local obj = Instance.new(className)
+    for k, v in pairs(props or {}) do obj[k] = v end
+    obj.Parent = parent
+    return obj
+end
+
+local function roundGui(obj, radius)
+    newGui("UICorner", {CornerRadius = UDim.new(0, radius)}, obj)
+end
+
+local function getPlayerItems(player)
+    local held, backpack = {}, {}
+    local character = player.Character
+    if character then
+        for _, item in ipairs(character:GetChildren()) do
+            if item:IsA("Tool") then table.insert(held, item.Name) end
+        end
+    end
+    local pack = player:FindFirstChildOfClass("Backpack")
+    if pack then
+        for _, item in ipairs(pack:GetChildren()) do
+            if item:IsA("Tool") then table.insert(backpack, item.Name) end
+        end
+    end
+    table.sort(held)
+    table.sort(backpack)
+    return held, backpack, pack ~= nil
+end
+
+local scheduleLeaderboardRefresh
+
+local function renderLeaderboard()
+    if not leaderboardEnabled or not leaderboardGui then return end
+    local panel = leaderboardGui:FindFirstChild("Panel")
+    local list = panel and panel:FindFirstChild("PlayerRows")
+    if not list then
+        warn("[Just X Universal] Leaderboard: PlayerRows missing")
+        return
+    end
+
+    for _, child in ipairs(list:GetChildren()) do
+        if child ~= list:FindFirstChildOfClass("UIListLayout") and child ~= list:FindFirstChildOfClass("UIPadding") then
+            child:Destroy()
+        end
+    end
+
+    local players = Players:GetPlayers()
+    table.sort(players, function(a, b)
+        if a == LocalPlayer then return true end
+        if b == LocalPlayer then return false end
+        return a.Name:lower() < b.Name:lower()
+    end)
+
+    if #players == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Name = "EmptyState"
+        empty.Size = UDim2.new(1, -8, 0, 34)
+        empty.BackgroundTransparency = 1
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 12
+        empty.TextColor3 = LB.muted
+        empty.Text = "Waiting for players..."
+        empty.Parent = list
+    end
+
+    for index, player in ipairs(players) do
+        local row = Instance.new("Frame")
+        row.Name = "Player_" .. tostring(player.UserId)
+        row.Size = UDim2.new(1, -6, 0, expanded[player] and 82 or 39)
+        row.BackgroundColor3 = LB.row
+        row.BorderSizePixel = 0
+        row.LayoutOrder = index
+        row.Parent = list
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 7)
+
+        local header = Instance.new("TextButton")
+        header.Name = "Header"
+        header.Size = UDim2.new(1, 0, 0, 38)
+        header.BackgroundTransparency = 1
+        header.Text = ""
+        header.AutoButtonColor = false
+        header.Parent = row
+
+        local avatar = Instance.new("ImageLabel")
+        avatar.Size = UDim2.fromOffset(27, 27)
+        avatar.Position = UDim2.fromOffset(6, 5)
+        avatar.BackgroundColor3 = LB.bg
+        avatar.BorderSizePixel = 0
+        avatar.Parent = header
+        Instance.new("UICorner", avatar).CornerRadius = UDim.new(1, 0)
+
+        task.spawn(function()
+            local okThumb, image = pcall(Players.GetUserThumbnailAsync, Players, player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+            if okThumb and avatar.Parent then avatar.Image = image end
+        end)
+
+        local name = Instance.new("TextLabel")
+        name.Position = UDim2.fromOffset(40, 3)
+        name.Size = UDim2.new(1, -66, 0, 16)
+        name.BackgroundTransparency = 1
+        name.Font = Enum.Font.GothamSemibold
+        name.TextSize = 11
+        name.TextColor3 = LB.text
+        name.TextXAlignment = Enum.TextXAlignment.Left
+        name.TextTruncate = Enum.TextTruncate.AtEnd
+        name.Text = player.DisplayName or player.Name
+        name.Parent = header
+
+        local username = Instance.new("TextLabel")
+        username.Position = UDim2.fromOffset(40, 19)
+        username.Size = UDim2.new(1, -66, 0, 13)
+        username.BackgroundTransparency = 1
+        username.Font = Enum.Font.Gotham
+        username.TextSize = 9
+        username.TextColor3 = LB.muted
+        username.TextXAlignment = Enum.TextXAlignment.Left
+        username.Text = "@" .. player.Name
+        username.Parent = header
+
+        local arrow = Instance.new("TextLabel")
+        arrow.AnchorPoint = Vector2.new(1, 0.5)
+        arrow.Position = UDim2.new(1, -7, 0, 19)
+        arrow.Size = UDim2.fromOffset(18, 18)
+        arrow.BackgroundTransparency = 1
+        arrow.Font = Enum.Font.GothamBold
+        arrow.TextSize = 14
+        arrow.TextColor3 = LB.muted
+        arrow.Text = expanded[player] and "-" or "+"
+        arrow.Parent = header
+
+        header.MouseButton1Click:Connect(function()
+            expanded[player] = not expanded[player]
+            renderLeaderboard()
+        end)
+
+        if expanded[player] then
+            local held, backpack, hasBackpack = getPlayerItems(player)
+            local detail = Instance.new("Frame")
+            detail.Name = "ToolDetails"
+            detail.Position = UDim2.fromOffset(8, 42)
+            detail.Size = UDim2.new(1, -16, 0, 34)
+            detail.BackgroundColor3 = LB.bg
+            detail.BackgroundTransparency = 0.2
+            detail.BorderSizePixel = 0
+            detail.Parent = row
+            Instance.new("UICorner", detail).CornerRadius = UDim.new(0, 5)
+
+            local heldColor = Color3.fromRGB(105, 210, 145)
+            local inventoryColor = Color3.fromRGB(105, 165, 255)
+
+            local function escapeRichText(value)
+                value = tostring(value):gsub("&", "&amp;")
+                value = value:gsub("<", "&lt;")
+                value = value:gsub(">", "&gt;")
+                value = value:gsub('"', "&quot;")
+                return value
+            end
+
+            local function makeToolText(items, emptyText, color)
+                if #items == 0 then
+                    return '<font color="#9BA3B4">' .. escapeRichText(emptyText) .. '</font>'
+                end
+                local names = {}
+                for _, itemName in ipairs(items) do
+                    table.insert(names, '<font color="#' .. color:ToHex() .. '">' .. escapeRichText(itemName) .. '</font>')
+                end
+                return table.concat(names, '<font color="#747D90">, </font>')
+            end
+
+            local function makeCategory(titleText, items, emptyText, color, position, width)
+                local category = Instance.new("Frame")
+                category.BackgroundTransparency = 1
+                category.Position = position
+                category.Size = width
+                category.Parent = detail
+
+                local heading = Instance.new("TextLabel")
+                heading.Size = UDim2.new(1, 0, 0, 12)
+                heading.BackgroundTransparency = 1
+                heading.Font = Enum.Font.GothamBold
+                heading.TextSize = 8
+                heading.TextColor3 = color
+                heading.TextXAlignment = Enum.TextXAlignment.Left
+                heading.Text = titleText
+                heading.Parent = category
+
+                local contents = Instance.new("TextLabel")
+                contents.Position = UDim2.fromOffset(0, 13)
+                contents.Size = UDim2.new(1, 0, 0, 19)
+                contents.BackgroundTransparency = 1
+                contents.Font = Enum.Font.GothamMedium
+                contents.TextSize = 9
+                contents.TextColor3 = LB.text
+                contents.TextXAlignment = Enum.TextXAlignment.Left
+                contents.TextYAlignment = Enum.TextYAlignment.Top
+                contents.TextWrapped = true
+                contents.RichText = true
+                contents.TextTruncate = Enum.TextTruncate.AtEnd
+                contents.Text = makeToolText(items, emptyText, color)
+                contents.Parent = category
+            end
+
+            makeCategory("IN HAND", held, "Nothing equipped", heldColor,
+                UDim2.fromOffset(7, 3), UDim2.new(0.5, -12, 1, -6))
+
+            local separator = Instance.new("Frame")
+            separator.Name = "CategoryDivider"
+            separator.AnchorPoint = Vector2.new(0.5, 0)
+            separator.Position = UDim2.new(0.5, 0, 0, 5)
+            separator.Size = UDim2.new(0, 1, 1, -10)
+            separator.BackgroundColor3 = LB.border
+            separator.BorderSizePixel = 0
+            separator.Parent = detail
+
+            makeCategory("IN INVENTORY", backpack,
+                hasBackpack and "Empty" or "Not replicated", inventoryColor,
+                UDim2.new(0.5, 7, 0, 3), UDim2.new(0.5, -14, 1, -6))
+        end
+    end
+
+    task.defer(function()
+        if list.Parent then
+            local layout = list:FindFirstChildOfClass("UIListLayout")
+            if layout then list.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 8) end
+        end
+    end)
+end
+
+scheduleLeaderboardRefresh = function()
+    if refreshPending then return end
+    refreshPending = true
+    task.defer(function()
+        refreshPending = false
+        local okRender, renderError = pcall(renderLeaderboard)
+        if not okRender then warn("[Just X Universal] Leaderboard render error:", renderError) end
+    end)
+end
+
+local function watchLeaderboardPlayer(player)
+    if playerWatchers[player] then
+        for _, conn in ipairs(playerWatchers[player]) do conn:Disconnect() end
+    end
+    local connections = {}
+    playerWatchers[player] = connections
+    local function watchCharacter(character)
+        table.insert(connections, character.ChildAdded:Connect(scheduleLeaderboardRefresh))
+        table.insert(connections, character.ChildRemoved:Connect(scheduleLeaderboardRefresh))
+        scheduleLeaderboardRefresh()
+    end
+    table.insert(connections, player.CharacterAdded:Connect(watchCharacter))
+    table.insert(connections, player.CharacterRemoving:Connect(scheduleLeaderboardRefresh))
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    if backpack then
+        table.insert(connections, backpack.ChildAdded:Connect(scheduleLeaderboardRefresh))
+        table.insert(connections, backpack.ChildRemoved:Connect(scheduleLeaderboardRefresh))
+    end
+    if player.Character then watchCharacter(player.Character) end
+end
+
+local function destroyLeaderboard()
+    if leaderboardGui then leaderboardGui:Destroy(); leaderboardGui = nil end
+    for player, connections in pairs(playerWatchers) do
+        for _, conn in ipairs(connections) do conn:Disconnect() end
+        playerWatchers[player] = nil
+    end
+    table.clear(expanded)
+end
+
+local function createLeaderboard()
+    destroyLeaderboard()
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not playerGui then
+        warn("[Just X Universal] Leaderboard: PlayerGui not found")
+        return
+    end
+
+    leaderboardGui = Instance.new("ScreenGui")
+    leaderboardGui.Name = "JustXCustomLeaderboard"
+    leaderboardGui.ResetOnSpawn = false
+    leaderboardGui.IgnoreGuiInset = false
+    leaderboardGui.DisplayOrder = 999
+    leaderboardGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    leaderboardGui.Enabled = true
+    leaderboardGui.Parent = playerGui
+
+    local panel = Instance.new("Frame")
+    panel.Name = "Panel"
+    panel.AnchorPoint = Vector2.new(1, 0)
+    panel.Position = UDim2.new(1, -12, 0, 48)
+    panel.Size = UDim2.fromOffset(208, 228)
+    panel.BackgroundColor3 = LB.bg
+    panel.BackgroundTransparency = 0.04
+    panel.BorderSizePixel = 0
+    panel.Visible = true
+    panel.Parent = leaderboardGui
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = LB.border
+    stroke.Thickness = 1
+    stroke.Parent = panel
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -48, 0, 30)
+    title.Position = UDim2.fromOffset(10, 0)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 11
+    title.TextColor3 = LB.text
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Text = "PLAYERS  ·  " .. tostring(#Players:GetPlayers())
+    title.Parent = panel
+
+    local collapse = Instance.new("TextButton")
+    collapse.Name = "Collapse"
+    collapse.AnchorPoint = Vector2.new(1, 0.5)
+    collapse.Position = UDim2.new(1, -8, 0, 15)
+    collapse.Size = UDim2.fromOffset(24, 22)
+    collapse.BackgroundColor3 = LB.row
+    collapse.BackgroundTransparency = 0.15
+    collapse.BorderSizePixel = 0
+    collapse.Font = Enum.Font.GothamBold
+    collapse.TextSize = 13
+    collapse.TextColor3 = LB.muted
+    collapse.Text = "−"
+    collapse.Parent = panel
+    Instance.new("UICorner", collapse).CornerRadius = UDim.new(0, 6)
+
+    local list = Instance.new("ScrollingFrame")
+    list.Name = "PlayerRows"
+    list.Position = UDim2.fromOffset(4, 32)
+    list.Size = UDim2.new(1, -8, 1, -36)
+    list.BackgroundTransparency = 1
+    list.BorderSizePixel = 0
+    list.ScrollBarThickness = 3
+    list.ScrollBarImageColor3 = LB.accent
+    list.CanvasSize = UDim2.new(0, 0, 0, 0)
+    list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    list.Parent = panel
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 4)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = list
+    local padding = Instance.new("UIPadding")
+    padding.PaddingLeft = UDim.new(0, 2)
+    padding.PaddingRight = UDim.new(0, 2)
+    padding.PaddingBottom = UDim.new(0, 4)
+    padding.Parent = list
+
+    local collapsed = false
+    collapse.MouseButton1Click:Connect(function()
+        collapsed = not collapsed
+        list.Visible = not collapsed
+        panel.Size = collapsed and UDim2.fromOffset(208, 34) or UDim2.fromOffset(208, 228)
+        collapse.Text = collapsed and "+" or "−"
+    end)
+
+    for _, player in ipairs(Players:GetPlayers()) do watchLeaderboardPlayer(player) end
+    renderLeaderboard()
+end
+
+local function setLeaderboard(enabled)
+    leaderboardEnabled = enabled
+    if enabled then
+        pcall(function()
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
+        end)
+        createLeaderboard()
+    else
+        destroyLeaderboard()
+        pcall(function()
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, true)
+        end)
+    end
+end
+
+Misc:Toggle({
+    Name = "Custom Leaderboard",
+    Default = false,
+    Flag = "JXU_CustomLeaderboard",
+    Callback = setLeaderboard
+})
+
+Players.PlayerAdded:Connect(function(player)
+    if espEnabled then watchPlayer(player) end
+    if espDropdown then espDropdown:Refresh() end
+    if leaderboardEnabled then watchLeaderboardPlayer(player); scheduleLeaderboardRefresh() end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    expanded[player] = nil
+    removeHighlight(player)
+    espTargets[player.UserId] = nil
+    if characterConnections[player] then characterConnections[player]:Disconnect(); characterConnections[player] = nil end
+    if espDropdown then espDropdown:Refresh() end
+    if playerWatchers[player] then
+        for _, conn in ipairs(playerWatchers[player]) do conn:Disconnect() end
+        playerWatchers[player] = nil
+    end
+    scheduleLeaderboardRefresh()
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.2)
+    applyMovement()
+    if flyEnabled then startFly() end
+    if noclipEnabled then setNoclip(true) end
+    if autoJumpOriginal ~= nil then
+        local hum = getHumanoid()
+        if hum then hum.AutoJumpEnabled = false end
+    end
+end)
+
+LocalPlayer.CharacterRemoving:Connect(function()
+    if flyEnabled then stopFly() end
+    if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
+    restoreCollision()
+end)
+
+print("[Just X Universal] Loaded with JustLib: Character / Visual / Misc")
