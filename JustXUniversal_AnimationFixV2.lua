@@ -145,47 +145,138 @@ local function classifyAnimationName(name)
     return nil
 end
 
+local ANIMATION_REFERENCE_URL = "https://create.roblox.com/docs/animation/using.md"
+local animationReferenceCache
+
+local function normalizeAnimationReferenceName(value)
+    return tostring(value or ""):lower():gsub("[^%w]", "")
+end
+
+local function splitAnimationReferenceRow(line)
+    if not line or not line:find("|", 1, true) then return nil end
+    line = line:gsub("%[([^%]]+)%]%([^%)]+%)", "%1")
+    line = line:gsub("^%s*|", ""):gsub("|%s*$", "")
+    local cells = {}
+    for cell in (line .. "|"):gmatch("(.-)|") do
+        cell = cell:gsub("%*%*", ""):gsub("`", "")
+        cell = cell:match("^%s*(.-)%s*$")
+        table.insert(cells, cell)
+    end
+    return cells
+end
+
+local function getOfficialAnimationReference(bundleName)
+    if not animationReferenceCache then
+        local okFetch, content = pcall(function()
+            return game:HttpGet(ANIMATION_REFERENCE_URL)
+        end)
+        if not okFetch or type(content) ~= "string" or content == "" then
+            return nil, "Could not download Roblox's official animation reference"
+        end
+        animationReferenceCache = content
+    end
+
+    local lowerContent = animationReferenceCache:lower()
+    local sectionStart = lowerContent:find("catalog animations", 1, true)
+    if not sectionStart then
+        return nil, "Catalog animation section was not found in Roblox documentation"
+    end
+
+    local section = animationReferenceCache:sub(sectionStart)
+    local headerIndexes
+    local rows = {}
+
+    for line in section:gmatch("[^\r\n]+") do
+        local cells = splitAnimationReferenceRow(line)
+        if cells and #cells >= 8 then
+            local indexes = {}
+            for index, cell in ipairs(cells) do
+                local key = normalizeAnimationReferenceName(cell)
+                if key == "run" then indexes.run = index
+                elseif key == "walk" then indexes.walk = index
+                elseif key == "jump" then indexes.jump = index
+                elseif key == "idle" then indexes.idle = index
+                elseif key == "fall" then indexes.fall = index
+                elseif key == "swim" then indexes.swim = index
+                elseif key == "swimidle" then indexes.swimidle = index
+                elseif key == "climb" then indexes.climb = index end
+            end
+            if indexes.run and indexes.walk and indexes.jump and indexes.idle
+                and indexes.fall and indexes.swim and indexes.swimidle and indexes.climb then
+                headerIndexes = indexes
+            elseif headerIndexes then
+                local name = cells[1] or ""
+                local nameKey = normalizeAnimationReferenceName(name)
+                if nameKey ~= "" and not nameKey:match("^%-+$") then
+                    table.insert(rows, {Name = nameKey, Cells = cells})
+                end
+            end
+        end
+    end
+
+    if not headerIndexes then
+        return nil, "Could not read the animation table from Roblox documentation"
+    end
+
+    local bundleKey = normalizeAnimationReferenceName(bundleName)
+    local bestRow
+    for _, row in ipairs(rows) do
+        if #row.Name >= 4 and (bundleKey:find(row.Name, 1, true) or row.Name:find(bundleKey, 1, true)) then
+            if not bestRow or #row.Name > #bestRow.Name then
+                bestRow = row
+            end
+        end
+    end
+    if not bestRow then
+        return nil, "This pack is not listed in Roblox's official catalog animation reference"
+    end
+
+    local map = {}
+    for slot, index in pairs(headerIndexes) do
+        local cell = bestRow.Cells[index]
+        local assetId = cell and cell:match("(%d+)")
+        if assetId then map[slot] = assetId end
+    end
+    if next(map) == nil then
+        return nil, "The matching catalog row did not contain animation IDs"
+    end
+    return map
+end
+
 local function resolveAnimationPack(bundleId)
     local details = AssetService:GetBundleDetailsAsync(tonumber(bundleId))
     if type(details) ~= "table" or type(details.Items) ~= "table" then
         error("Roblox returned invalid bundle details")
     end
     local bundleType = tostring(details.BundleType or "")
+    local packName = tostring(details.Name or ("Animation Pack " .. bundleId))
 
-    local map, returnedItems = {}, {}
-    for _, item in ipairs(details.Items) do
-        local itemName = tostring(item.Name or "Unnamed")
-        local itemType = tostring(item.Type or "?")
-        local assetType = tostring(item.AssetType or "?")
-        table.insert(returnedItems, itemName .. " [" .. itemType .. "/" .. assetType .. "]")
-        if item.Type == "Asset" and tonumber(item.Id) then
-            local slot = classifyAnimationName(itemName)
-            if slot then map[slot] = tostring(item.Id) end
+    local map, returnedItems = getOfficialAnimationReference(packName)
+    local source = "Roblox official catalog reference"
+    if not map then
+        map = {}
+        source = "Bundle item IDs (official reference unavailable)"
+        for _, item in ipairs(details.Items) do
+            local itemName = tostring(item.Name or "Unnamed")
+            local itemType = tostring(item.Type or "?")
+            local assetType = tostring(item.AssetType or "?")
+            table.insert(returnedItems, itemName .. " [" .. itemType .. "/" .. assetType .. "]")
+            if item.Type == "Asset" and tonumber(item.Id) then
+                local slot = classifyAnimationName(itemName)
+                if slot then map[slot] = tostring(item.Id) end
+            end
         end
-    end
-    -- Roblox's legacy Cartoony bundle entries expose catalog item IDs (837...),
-    -- but the playable animation clip IDs are the canonical 742... assets.
-    if tostring(bundleId) == "56" then
-        map = {
-            run = "742638842",
-            walk = "742640026",
-            jump = "742637942",
-            idle = "742637544",
-            fall = "742637151",
-            swim = "742639220",
-            swimidle = "742639812",
-            climb = "742636889"
-        }
     end
 
     if next(map) == nil then
-        local summary = #returnedItems > 0 and table.concat(returnedItems, ", ") or "Items is empty"
-        error("No animation slots recognized. BundleType=" .. bundleType .. "; returned: " .. summary)
+        local summary = #returnedItems > 0 and table.concat(returnedItems, ", ") or "Items are empty"
+        error("No animation slots recognized. BundleType=" .. bundleType .. "; " .. summary)
     end
     return {
         Id = tostring(bundleId),
-        Name = tostring(details.Name or ("Animation Pack " .. bundleId)),
-        Animations = map
+        Name = packName,
+        Animations = map,
+        Source = source
     }
 end
 
