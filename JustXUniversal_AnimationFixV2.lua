@@ -152,19 +152,6 @@ local function normalizeAnimationReferenceName(value)
     return tostring(value or ""):lower():gsub("[^%w]", "")
 end
 
-local function splitAnimationReferenceRow(line)
-    if not line or not line:find("|", 1, true) then return nil end
-    line = line:gsub("%[([^%]]+)%]%([^%)]+%)", "%1")
-    line = line:gsub("^%s*|", ""):gsub("|%s*$", "")
-    local cells = {}
-    for cell in (line .. "|"):gmatch("(.-)|") do
-        cell = cell:gsub("%*%*", ""):gsub("`", "")
-        cell = cell:match("^%s*(.-)%s*$")
-        table.insert(cells, cell)
-    end
-    return cells
-end
-
 local function getOfficialAnimationReference(bundleName)
     if not animationReferenceCache then
         local okFetch, content = pcall(function()
@@ -183,64 +170,39 @@ local function getOfficialAnimationReference(bundleName)
     end
 
     local section = animationReferenceCache:sub(sectionStart)
-    local headerIndexes
-    local rows = {}
-
-    for line in section:gmatch("[^\r\n]+") do
-        local cells = splitAnimationReferenceRow(line)
-        if cells and #cells >= 8 then
-            local indexes = {}
-            for index, cell in ipairs(cells) do
-                local key = normalizeAnimationReferenceName(cell)
-                if key == "run" then indexes.run = index
-                elseif key == "walk" then indexes.walk = index
-                elseif key == "jump" then indexes.jump = index
-                elseif key == "idle" then indexes.idle = index
-                elseif key == "fall" then indexes.fall = index
-                elseif key == "swim" then indexes.swim = index
-                elseif key == "swimidle" then indexes.swimidle = index
-                elseif key == "climb" then indexes.climb = index end
-            end
-            if indexes.run and indexes.walk and indexes.jump and indexes.idle
-                and indexes.fall and indexes.swim and indexes.swimidle and indexes.climb then
-                headerIndexes = indexes
-            elseif headerIndexes then
-                local name = cells[1] or ""
-                local nameKey = normalizeAnimationReferenceName(name)
-                if nameKey ~= "" and not nameKey:match("^%-+$") then
-                    table.insert(rows, {Name = nameKey, Cells = cells})
-                end
-            end
-        end
-    end
-
-    if not headerIndexes then
-        return nil, "Could not read the animation table from Roblox documentation"
-    end
-
     local bundleKey = normalizeAnimationReferenceName(bundleName)
-    local bestRow
-    for _, row in ipairs(rows) do
-        if #row.Name >= 4 and (bundleKey:find(row.Name, 1, true) or row.Name:find(bundleKey, 1, true)) then
-            if not bestRow or #row.Name > #bestRow.Name then
-                bestRow = row
+
+    for row in section:gmatch("<tr[^>]*>(.-)</tr>") do
+        local nameCell, animationCell = row:match("<td[^>]*>(.-)</td>%s*<td[^>]*>(.-)</td>")
+        if nameCell and animationCell then
+            local plainName = nameCell:gsub("<[^>]->", " "):gsub("%*%*", ""):gsub("&nbsp;", " ")
+            local rowKey = normalizeAnimationReferenceName(plainName)
+
+            if #rowKey >= 4 and (bundleKey:find(rowKey, 1, true) or rowKey:find(bundleKey, 1, true)) then
+                local map = {}
+                for animationBlock in animationCell:gmatch("<Grid[^>]*>(.-)</Grid>") do
+                    local label = animationBlock:match("%*%*(.-)%*%*")
+                    local assetId = animationBlock:match("(%d+)")
+                    if label and assetId then
+                        local slot = normalizeAnimationReferenceName(label)
+                        if slot == "swimidle" then
+                            map.swimidle = assetId
+                        elseif slot == "run" or slot == "walk" or slot == "jump"
+                            or slot == "idle" or slot == "fall" or slot == "swim" or slot == "climb" then
+                            if not map[slot] then map[slot] = assetId end
+                        end
+                    end
+                end
+
+                if next(map) then
+                    return map
+                end
+                return nil, "The matching catalog entry contained no readable animation IDs"
             end
         end
     end
-    if not bestRow then
-        return nil, "This pack is not listed in Roblox's official catalog animation reference"
-    end
 
-    local map = {}
-    for slot, index in pairs(headerIndexes) do
-        local cell = bestRow.Cells[index]
-        local assetId = cell and cell:match("(%d+)")
-        if assetId then map[slot] = assetId end
-    end
-    if next(map) == nil then
-        return nil, "The matching catalog row did not contain animation IDs"
-    end
-    return map
+    return nil, "This pack is not listed in Roblox's official catalog animation reference"
 end
 
 local function resolveAnimationPack(bundleId)
