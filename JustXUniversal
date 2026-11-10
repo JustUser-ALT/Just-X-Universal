@@ -149,9 +149,6 @@ local function resolveAnimationPack(bundleId)
         error("Roblox returned invalid bundle details")
     end
     local bundleType = tostring(details.BundleType or "")
-    if bundleType ~= "" and not bundleType:lower():find("animation", 1, true) then
-        error("This bundle is not an Animation Pack (BundleType: " .. bundleType .. ")")
-    end
 
     local map, returnedItems = {}, {}
     for _, item in ipairs(details.Items) do
