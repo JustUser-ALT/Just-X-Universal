@@ -1,5 +1,5 @@
 -- Just X Universal
-warn("[Just X Universal] Animation fix build: CARTOONY-742-V2")
+warn("[Just X Universal] Animation reference build: AUTO-REFERENCE-V1")
 -- Built on JustLib (Grid layout, 3 columns)
 -- Features: Character, Visual, Misc
 
