@@ -87,21 +87,20 @@ local function collect(label, duration)
         end
     end
 
+    local bodySampleCount = 0
+    local jointSampleCount = 0
+    for _, sample in ipairs(samples) do
+        if next(sample.Body) then
+            bodySampleCount += 1
+        end
+        if next(sample.Joints) then
+            jointSampleCount += 1
+        end
+    end
+
     log(label, "Samples:", #samples,
-        "Body samples with data:", (function()
-            local n = 0
-            for _, s in ipairs(samples) do
-                if next(s.Body) then n += 1 end
-            end
-            return n
-        end)(),
-        "Joint samples with data:", (function()
-            local n = 0
-            for _, s in ipairs(samples) do
-                if next(s.Joints) then n += 1 end
-            end
-            return n
-        end)()
+        "Body samples with data:", bodySampleCount,
+        "Joint samples with data:", jointSampleCount
     )
     return samples
 end
