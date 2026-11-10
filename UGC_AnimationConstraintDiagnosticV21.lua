@@ -120,49 +120,71 @@ local function compareSets(baseline, test, field, label)
 
     local rows = {}
     local changed = 0
-    local maxPosition = 0
-    local maxAngle = 0
     local valid = 0
+    local overallMaxPosition = 0
+    local overallMaxAngle = 0
 
     for name in pairs(names) do
-        local bestPosition = math.huge
-        local bestAngle = math.huge
+        local totalNearestPosition = 0
+        local totalNearestAngle = 0
+        local maxNearestPosition = 0
+        local maxNearestAngle = 0
+        local sampleCount = 0
 
-        -- Find the closest baseline pose for this part/joint, considering both
-        -- translation and orientation, to avoid comparing unrelated idle-cycle phases.
+        -- For every UGC sample, find the closest baseline idle sample.
+        -- Then average those nearest differences, so one matching animation
+        -- frame cannot hide the rest of the UGC pose.
         for _, testSample in ipairs(test) do
             local testCf = testSample[field][name]
             if testCf then
+                local nearestPosition = math.huge
+                local nearestAngle = math.huge
+                local nearestScore = math.huge
+
                 for _, baseSample in ipairs(baseline) do
                     local baseCf = baseSample[field][name]
                     if baseCf then
                         local position, angle = delta(baseCf, testCf)
                         local score = position + angle / 180
-                        local bestScore = bestPosition + bestAngle / 180
-                        if score < bestScore then
-                            bestPosition = position
-                            bestAngle = angle
+                        if score < nearestScore then
+                            nearestScore = score
+                            nearestPosition = position
+                            nearestAngle = angle
                         end
                     end
+                end
+
+                if nearestScore < math.huge then
+                    sampleCount += 1
+                    totalNearestPosition += nearestPosition
+                    totalNearestAngle += nearestAngle
+                    if nearestPosition > maxNearestPosition then maxNearestPosition = nearestPosition end
+                    if nearestAngle > maxNearestAngle then maxNearestAngle = nearestAngle end
                 end
             end
         end
 
-        if bestPosition < math.huge then
+        if sampleCount > 0 then
             valid += 1
-            if bestPosition > maxPosition then maxPosition = bestPosition end
-            if bestAngle > maxAngle then maxAngle = bestAngle end
-            if bestPosition > 0.015 or bestAngle > 2 then
+            local averagePosition = totalNearestPosition / sampleCount
+            local averageAngle = totalNearestAngle / sampleCount
+            if maxNearestPosition > overallMaxPosition then overallMaxPosition = maxNearestPosition end
+            if maxNearestAngle > overallMaxAngle then overallMaxAngle = maxNearestAngle end
+
+            if averagePosition > 0.015 or averageAngle > 2 then
                 changed += 1
-                table.insert(rows, string.format("%s(pos=%.4f, rot=%.2fdeg)", name, bestPosition, bestAngle))
+                table.insert(rows, string.format(
+                    "%s(avgPos=%.4f, avgRot=%.2fdeg, maxRot=%.2fdeg)",
+                    name, averagePosition, averageAngle, maxNearestAngle
+                ))
             end
         end
     end
 
     table.sort(rows)
     log(label, "Changed:", changed .. "/" .. valid,
-        "MaxPosition:", maxPosition,
-        "MaxRotationDegrees:", maxAngle,
+        "MaxNearestPosition:", overallMaxPosition,
+        "MaxNearestRotationDegrees:", overallMaxAngle,
         "Details:", table.concat(rows, "; "))
 end
 
