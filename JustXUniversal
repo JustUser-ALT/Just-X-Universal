@@ -137,7 +137,7 @@ local function normalizeAnimationToken(value)
 end
 
 local DESCRIPTION_TO_TARGETS = {
-    IdleAnimation = {"idle"},
+    IdleAnimation = {"idle1", "idle2"},
     WalkAnimation = {"walk"},
     RunAnimation = {"run"},
     JumpAnimation = {"jump"},
@@ -213,7 +213,8 @@ local function resolveAnimationPack(bundleId)
 
         local animations = {}
         local generatedPaths = {
-            idle = {{"idle", "Animation1"}, {"idle", "Animation2"}},
+            idle1 = {{"idle", "Animation1"}},
+            idle2 = {{"idle", "Animation2"}},
             walk = {{"walk", "WalkAnim"}},
             run = {{"run", "RunAnim"}},
             jump = {{"jump", "JumpAnim"}},
@@ -267,6 +268,8 @@ local function findAnimationTargetSlot(animationObject)
     local path = table.concat(names, "/")
     if path:find("swimidle", 1, true) then return "swimidle" end
     if path:find("swim", 1, true) then return "swim" end
+    if path:find("animation1", 1, true) then return "idle1" end
+    if path:find("animation2", 1, true) then return "idle2" end
     if path:find("idle", 1, true) then return "idle" end
     for slot in pairs(animationSlots) do
         if slot ~= "idle" and path:find(slot, 1, true) then return slot end
@@ -321,6 +324,9 @@ local function applyAnimationMap(restartAfterApply)
         if object:IsA("Animation") then
             local slot = findAnimationTargetSlot(object)
             local assetId = slot and activeAnimationMap[slot]
+            if not assetId and (slot == "idle1" or slot == "idle2") then
+                assetId = activeAnimationMap.idle
+            end
             local originalId = originalAnimationIds[object]
             local targetId = assetId and ("rbxassetid://" .. tostring(assetId)) or originalId
 
