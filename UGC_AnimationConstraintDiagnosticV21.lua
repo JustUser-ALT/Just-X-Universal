@@ -1,4 +1,5 @@
--- UGC AnimationConstraint Diagnostic V21
+-- UGC AnimationConstraint Diagnostic V21 FIXED
+-- PATCH: removed malformed nested count expression; collect() uses explicit counters.
 -- Compares baseline Modern R6 idle against R6 Think Idle1 using both position AND rotation.
 -- Does not disable Animate, stop existing tracks, or modify the character.
 -- Keep the character standing still throughout the test.
