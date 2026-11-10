@@ -101,7 +101,7 @@ local function collect(label, duration)
                 if next(s.Joints) then n += 1 end
             end
             return n
-        end)())
+        end)()
     )
     return samples
 end
