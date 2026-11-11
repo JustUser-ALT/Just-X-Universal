@@ -783,7 +783,7 @@ local function saveCurrentSkin()
 
     local customName = tostring(skinNameInput:Get() or ""):match("^%s*(.-)%s*$")
     local savedName = customName ~= "" and customName or getNextSkinName()
-    local key = tostring(os.time()) .. "_" .. tostring(#skinPacks + 1)
+    local key = HttpService:GenerateGUID(false)
 
     table.insert(skinPacks, {
         Key = key,
@@ -950,10 +950,13 @@ local function resetSkin()
         return
     end
 
+    local previousAnimationMap = activeAnimationMap
     activeAnimationMap = {}
     if applySkinData(originalSkinData, false) then
         activeSkinData = nil
         if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin restored", Type = "Success", Duration = 4}) end
+    else
+        activeAnimationMap = previousAnimationMap
     end
 end
 
