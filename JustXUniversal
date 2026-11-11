@@ -31,9 +31,9 @@ local Main = Window:Tab({
     Type = "Grid"
 })
 
-local Antimations = Window:Tab({
-    Name = "Antimations",
-    Icon = "audio-lines",
+local Avatar = Window:Tab({
+    Name = "Avatar",
+    Icon = "user-round",
     Type = "Grid"
 })
 
@@ -41,7 +41,9 @@ local Antimations = Window:Tab({
 -- ANIMATION PACKS
 --==================================================
 
-local AnimationSection = Antimations:Section({Title = "Animation Packs", Column = 1})
+local AnimationSection = Avatar:Section({Title = "Animation Bundles", Column = 1})
+local EmotesSection = Avatar:Section({Title = "Emotes", Column = 2})
+local SkinSection = Avatar:Section({Title = "Skin Changer", Column = 3})
 local AssetService = game:GetService("AssetService")
 local HttpService = game:GetService("HttpService")
 local animationPacks = {}
@@ -381,13 +383,13 @@ end
 local function applySelectedAnimationPack()
     local pack = syncSelectedAnimationPack()
     if not pack then
-        if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Select an Animation Pack first", Type = "Info", Duration = 3}) end
+        if JL.Notify then JL:Notify({Title = "Animation Bundles", Desc = "Select an Animation Pack first", Type = "Info", Duration = 3}) end
         return
     end
     local okResolve, resolved = pcall(resolveAnimationPack, pack.Id)
     if not okResolve then
         warn("[Just X Universal] Animation pack error:", resolved)
-        if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
+        if JL.Notify then JL:Notify({Title = "Animation Bundles", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
         return
     end
     local character = LocalPlayer.Character
@@ -396,7 +398,7 @@ local function applySelectedAnimationPack()
     activeAnimationMap = resolved.Animations
     queueAnimationReapply(true)
     if JL.Notify then
-        JL:Notify({Title = "Antimations", Desc = "Applied " .. resolved.Name .. " (" .. resolved.Source .. ")", Type = "Success", Duration = 4}) end
+        JL:Notify({Title = "Animation Bundles", Desc = "Applied " .. resolved.Name .. " (" .. resolved.Source .. ")", Type = "Success", Duration = 4}) end
 end
 
 local function resetAnimationPack()
@@ -404,7 +406,7 @@ local function resetAnimationPack()
     local changed = applyAnimationMap(true)
     if JL.Notify then
         JL:Notify({
-            Title = "Antimations",
+            Title = "Animation Bundles",
             Desc = changed and "Original character animations restored" or "Original animations are already active",
             Type = "Success",
             Duration = 4
@@ -459,18 +461,18 @@ AnimationSection:Button({
                 or rawInput:match("/bundles/(%d+)")
         end
         if not bundleId then
-            if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Enter a Bundle ID or a valid Roblox bundle link", Type = "Error", Duration = 3}) end
+            if JL.Notify then JL:Notify({Title = "Animation Bundles", Desc = "Enter a Bundle ID or a valid Roblox bundle link", Type = "Error", Duration = 3}) end
             return
         end
         for _, existing in ipairs(animationPacks) do
             if existing.Id == bundleId then
-                if JL.Notify then JL:Notify({Title = "Antimations", Desc = "This pack is already saved", Type = "Info", Duration = 3}) end
+                if JL.Notify then JL:Notify({Title = "Animation Bundles", Desc = "This pack is already saved", Type = "Info", Duration = 3}) end
                 return
             end
         end
         local okResolve, resolved = pcall(resolveAnimationPack, bundleId)
         if not okResolve then
-            if JL.Notify then JL:Notify({Title = "Antimations", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
+            if JL.Notify then JL:Notify({Title = "Animation Bundles", Desc = tostring(resolved), Type = "Error", Duration = 5}) end
             return
         end
         local customName = tostring(animationPackNameInput:Get() or ""):match("^%s*(.-)%s*$")
@@ -480,7 +482,7 @@ AnimationSection:Button({
         if animationPackDropdown and animationPackDropdown.Refresh then
             animationPackDropdown:Refresh()
         end
-        if JL.Notify then JL:Notify({Title = "Antimations", Desc = "Saved: " .. resolved.Name, Type = "Success", Duration = 4}) end
+        if JL.Notify then JL:Notify({Title = "Animation Bundles", Desc = "Saved: " .. resolved.Name, Type = "Success", Duration = 4}) end
     end
 })
 
@@ -516,6 +518,549 @@ AnimationSection:Button({
 LocalPlayer.CharacterAdded:Connect(watchAnimationCharacter)
 if LocalPlayer.Character then watchAnimationCharacter(LocalPlayer.Character) end
 
+--==================================================
+-- SKIN CHANGER
+--==================================================
+
+local TeleportService = game:GetService("TeleportService")
+local SKIN_CONFIG = "JustXUniversal_Skins.json"
+local CATALOG_AVATAR_CREATOR_PLACE_ID = 7041939546
+local skinPacks = {}
+local selectedSkin
+local originalSkinData
+local activeSkinData
+local skinLoadAnimations = false
+
+local skinDescriptionProperties = {
+    "BackAccessory",
+    "FaceAccessory",
+    "FrontAccessory",
+    "HairAccessory",
+    "HatAccessory",
+    "NeckAccessory",
+    "ShoulderAccessory",
+    "WaistAccessory",
+    "Shirt",
+    "Pants",
+    "GraphicTShirt",
+    "Face",
+    "Head",
+    "LeftArm",
+    "LeftLeg",
+    "RightArm",
+    "RightLeg",
+    "Torso",
+    "BodyTypeScale",
+    "DepthScale",
+    "HeadScale",
+    "HeightScale",
+    "ProportionScale",
+    "WidthScale",
+    "HeadColor",
+    "LeftArmColor",
+    "LeftLegColor",
+    "RightArmColor",
+    "RightLegColor",
+    "TorsoColor",
+    "ClimbAnimation",
+    "FallAnimation",
+    "IdleAnimation",
+    "JumpAnimation",
+    "MoodAnimation",
+    "RunAnimation",
+    "SwimAnimation",
+    "WalkAnimation"
+}
+
+local function descriptionToSkinData(description)
+    if not description or not description:IsA("HumanoidDescription") then
+        error("HumanoidDescription is unavailable")
+    end
+
+    local data = {
+        Properties = {},
+        Accessories = {},
+        Emotes = {},
+        EquippedEmotes = {}
+    }
+
+    for _, property in ipairs(skinDescriptionProperties) do
+        local okProperty, value = pcall(function()
+            return description[property]
+        end)
+        if okProperty then
+            if typeof(value) == "Color3" then
+                data.Properties[property] = {
+                    __type = "Color3",
+                    R = value.R,
+                    G = value.G,
+                    B = value.B
+                }
+            elseif type(value) == "string" or type(value) == "number" or type(value) == "boolean" then
+                data.Properties[property] = value
+            end
+        end
+    end
+
+    local okAccessories, accessories = pcall(function()
+        return description:GetAccessories(true)
+    end)
+    if okAccessories and type(accessories) == "table" then
+        for _, accessory in ipairs(accessories) do
+            local accessoryType = tostring(accessory.AccessoryType or "")
+            accessoryType = accessoryType:match("%.([^%.]+)$") or accessoryType
+            table.insert(data.Accessories, {
+                AssetId = tonumber(accessory.AssetId) or 0,
+                AccessoryType = accessoryType,
+                IsLayered = accessory.IsLayered == true,
+                Order = tonumber(accessory.Order) or 0,
+                Puffiness = tonumber(accessory.Puffiness) or 1
+            })
+        end
+    end
+
+    pcall(function()
+        data.Emotes = description:GetEmotes()
+    end)
+    pcall(function()
+        data.EquippedEmotes = description:GetEquippedEmotes()
+    end)
+
+    return data
+end
+
+local function skinDataToDescription(data)
+    if type(data) ~= "table" or type(data.Properties) ~= "table" then
+        error("Saved skin data is invalid")
+    end
+
+    local description = Instance.new("HumanoidDescription")
+    for property, value in pairs(data.Properties) do
+        if type(property) == "string" then
+            if type(value) == "table" and value.__type == "Color3" then
+                pcall(function()
+                    description[property] = Color3.new(
+                        tonumber(value.R) or 0,
+                        tonumber(value.G) or 0,
+                        tonumber(value.B) or 0
+                    )
+                end)
+            else
+                pcall(function()
+                    description[property] = value
+                end)
+            end
+        end
+    end
+
+    local accessories = {}
+    for _, accessory in ipairs(type(data.Accessories) == "table" and data.Accessories or {}) do
+        local accessoryType
+        pcall(function()
+            accessoryType = Enum.AccessoryType[accessory.AccessoryType]
+        end)
+        if accessoryType and tonumber(accessory.AssetId) then
+            table.insert(accessories, {
+                AssetId = tonumber(accessory.AssetId),
+                AccessoryType = accessoryType,
+                IsLayered = accessory.IsLayered == true,
+                Order = tonumber(accessory.Order) or 0,
+                Puffiness = tonumber(accessory.Puffiness) or 1
+            })
+        end
+    end
+    pcall(function()
+        description:SetAccessories(accessories, true)
+    end)
+    pcall(function()
+        description:SetEmotes(type(data.Emotes) == "table" and data.Emotes or {})
+    end)
+    pcall(function()
+        description:SetEquippedEmotes(type(data.EquippedEmotes) == "table" and data.EquippedEmotes or {})
+    end)
+
+    return description
+end
+
+local function loadSkinConfig()
+    if type(isfile) ~= "function" or type(readfile) ~= "function" then return end
+    local okRead, raw = pcall(function()
+        if not isfile(SKIN_CONFIG) then return nil end
+        return readfile(SKIN_CONFIG)
+    end)
+    if not okRead or type(raw) ~= "string" or raw == "" then return end
+
+    local okDecode, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+    if not okDecode or type(decoded) ~= "table" then return end
+
+    for _, skin in ipairs(decoded) do
+        if type(skin) == "table" and type(skin.Data) == "table" and type(skin.Data.Properties) == "table" then
+            table.insert(skinPacks, {
+                Key = tostring(skin.Key or (#skinPacks + 1)),
+                Name = tostring(skin.Name or ("Skin" .. (#skinPacks + 1))),
+                Data = skin.Data
+            })
+        end
+    end
+end
+
+local function saveSkinConfig()
+    if type(writefile) ~= "function" then return false end
+    local okSave = pcall(function()
+        writefile(SKIN_CONFIG, HttpService:JSONEncode(skinPacks))
+    end)
+    return okSave
+end
+
+local function getSkinNames()
+    local names = {}
+    for _, skin in ipairs(skinPacks) do
+        table.insert(names, skin.Name .. "  [" .. skin.Key .. "]")
+    end
+    return names
+end
+
+local function findSkinByOption(option)
+    if type(option) ~= "string" then return nil end
+    local key = option:match("%[([^%]]+)%]$")
+    for _, skin in ipairs(skinPacks) do
+        if skin.Key == key then return skin end
+    end
+end
+
+local function syncSelectedSkin()
+    if skinDropdown and skinDropdown.Get then
+        local ok, value = pcall(function()
+            return skinDropdown:Get()
+        end)
+        if ok then
+            local found
+            if type(value) == "table" then
+                for option, isSelected in pairs(value) do
+                    if isSelected then
+                        found = findSkinByOption(option)
+                        if found then break end
+                    end
+                end
+            else
+                found = findSkinByOption(value)
+            end
+            selectedSkin = found
+        end
+    end
+    return selectedSkin
+end
+
+local function getNextSkinName()
+    local highest = 0
+    for _, skin in ipairs(skinPacks) do
+        local number = tonumber(skin.Name:match("^Skin(%d+)$"))
+        if number and number > highest then highest = number end
+    end
+    return "Skin" .. tostring(highest + 1)
+end
+
+local function getCurrentHumanoidDescription()
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then error("Current character Humanoid is unavailable") end
+    return humanoid:GetAppliedDescription()
+end
+
+local function saveCurrentSkin()
+    local okDescription, description = pcall(getCurrentHumanoidDescription)
+    if not okDescription then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(description), Type = "Error", Duration = 5}) end
+        return
+    end
+
+    local okData, skinData = pcall(descriptionToSkinData, description)
+    pcall(function() description:Destroy() end)
+    if not okData then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(skinData), Type = "Error", Duration = 5}) end
+        return
+    end
+
+    local customName = tostring(skinNameInput:Get() or ""):match("^%s*(.-)%s*$")
+    local savedName = customName ~= "" and customName or getNextSkinName()
+    local key = tostring(os.time()) .. "_" .. tostring(#skinPacks + 1)
+
+    table.insert(skinPacks, {
+        Key = key,
+        Name = savedName,
+        Data = skinData
+    })
+
+    if not saveSkinConfig() then
+        table.remove(skinPacks, #skinPacks)
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Could not save the skin file. Check executor file access.", Type = "Error", Duration = 5}) end
+        return
+    end
+
+    if skinDropdown and skinDropdown.Refresh then
+        skinDropdown:Refresh()
+    end
+    if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Saved: " .. savedName, Type = "Success", Duration = 4}) end
+end
+
+local function resolveSkinAnimationMap(description)
+    local temporaryModel
+    local okResolve, result = pcall(function()
+        temporaryModel = Players:CreateHumanoidModelFromDescription(
+            description,
+            Enum.HumanoidRigType.R15
+        )
+        if not temporaryModel then error("Roblox could not create the temporary R15 skin resolver model") end
+
+        local generatedAnimate = temporaryModel:FindFirstChild("Animate")
+        if not generatedAnimate then error("Temporary R15 skin model has no Animate script") end
+
+        local paths = {
+            idle1 = {"idle", "Animation1"},
+            idle2 = {"idle", "Animation2"},
+            walk = {"walk", "WalkAnim"},
+            run = {"run", "RunAnim"},
+            jump = {"jump", "JumpAnim"},
+            fall = {"fall", "FallAnim"},
+            climb = {"climb", "ClimbAnim"},
+            swim = {"swim", "Swim"},
+            swimidle = {"swimidle", "SwimIdle"}
+        }
+        local animations = {}
+        for target, path in pairs(paths) do
+            local animation = findGeneratedAnimation(generatedAnimate, path)
+            if animation and animation:IsA("Animation") and animation.AnimationId ~= "" then
+                animations[target] = animation.AnimationId:gsub("^rbxassetid://", "")
+            end
+        end
+        if not next(animations) then error("No animation IDs could be resolved from this skin") end
+        return animations
+    end)
+
+    if temporaryModel then
+        pcall(function() temporaryModel:Destroy() end)
+    end
+    if not okResolve then error(result) end
+    return result
+end
+
+local function applySkinData(data, loadAnimations)
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Current character Humanoid is unavailable", Type = "Error", Duration = 4}) end
+        return false
+    end
+
+    local okDescription, description = pcall(skinDataToDescription, data)
+    if not okDescription then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(description), Type = "Error", Duration = 5}) end
+        return false
+    end
+
+    local nextAnimationMap
+    if loadAnimations then
+        local okAnimations, result = pcall(resolveSkinAnimationMap, description)
+        if okAnimations then
+            nextAnimationMap = result
+        else
+            if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Skin loaded, but its animations could not be resolved: " .. tostring(result), Type = "Warn", Duration = 5}) end
+        end
+    end
+
+    local okApply, applyError = pcall(function()
+        humanoid:ApplyDescriptionReset(description)
+    end)
+    if not okApply then
+        okApply, applyError = pcall(function()
+            humanoid:ApplyDescription(description)
+        end)
+    end
+    pcall(function() description:Destroy() end)
+
+    if not okApply then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(applyError), Type = "Error", Duration = 5}) end
+        return false
+    end
+
+    activeSkinData = data
+    if loadAnimations and nextAnimationMap then
+        activeAnimationMap = nextAnimationMap
+    end
+
+    task.wait(0.35)
+    queueAnimationReapply(true)
+    return true
+end
+
+local function loadSelectedSkin()
+    local skin = syncSelectedSkin()
+    if not skin then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Select a saved skin first", Type = "Info", Duration = 3}) end
+        return
+    end
+
+    if not originalSkinData then
+        local okOriginal, description = pcall(getCurrentHumanoidDescription)
+        if okOriginal then
+            local okData, data = pcall(descriptionToSkinData, description)
+            pcall(function() description:Destroy() end)
+            if okData then originalSkinData = data end
+        end
+    end
+
+    if applySkinData(skin.Data, skinLoadAnimations) then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Loaded: " .. skin.Name, Type = "Success", Duration = 4}) end
+    end
+end
+
+local function deleteSelectedSkin()
+    local skin = syncSelectedSkin()
+    if not skin then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Select a saved skin first", Type = "Info", Duration = 3}) end
+        return
+    end
+
+    for index, savedSkin in ipairs(skinPacks) do
+        if savedSkin.Key == skin.Key then
+            table.remove(skinPacks, index)
+            break
+        end
+    end
+    selectedSkin = nil
+    saveSkinConfig()
+    if skinDropdown and skinDropdown.Refresh then
+        skinDropdown:Refresh()
+    end
+    if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Deleted: " .. skin.Name, Type = "Success", Duration = 3}) end
+end
+
+local function resetSkin()
+    if not originalSkinData then
+        local okOriginal, description = pcall(getCurrentHumanoidDescription)
+        if okOriginal then
+            local okData, data = pcall(descriptionToSkinData, description)
+            pcall(function() description:Destroy() end)
+            if okData then originalSkinData = data end
+        end
+    end
+
+    if not originalSkinData then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original character appearance could not be captured", Type = "Error", Duration = 4}) end
+        return
+    end
+
+    activeAnimationMap = {}
+    if applySkinData(originalSkinData, false) then
+        activeSkinData = nil
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin restored", Type = "Success", Duration = 4}) end
+    end
+end
+
+loadSkinConfig()
+
+local initialDescriptionOk, initialDescription = pcall(getCurrentHumanoidDescription)
+if initialDescriptionOk then
+    local initialDataOk, initialData = pcall(descriptionToSkinData, initialDescription)
+    pcall(function() initialDescription:Destroy() end)
+    if initialDataOk then originalSkinData = initialData end
+end
+
+local skinNameInput = SkinSection:Input({
+    Name = "Skin Name (Optional)",
+    Placeholder = "Leave empty for Skin1",
+    Flag = "JXU_SkinNameInput"
+})
+
+SkinSection:Button({
+    Name = "Save Current Skin",
+    Callback = function()
+        if game.PlaceId ~= CATALOG_AVATAR_CREATOR_PLACE_ID then
+            local shouldTeleport = JL:Confirm({
+                Title = "Skin Editor Not Detected",
+                Desc = "It looks like you're not in any skin editor place. Would you like to be teleported to the Catalog Avatar Creator to create and save skins? If not, your current skin will be saved to the list.",
+                ConfirmText = "Yes",
+                CancelText = "No"
+            })
+            if shouldTeleport then
+                pcall(function()
+                    TeleportService:Teleport(CATALOG_AVATAR_CREATOR_PLACE_ID, LocalPlayer)
+                end)
+                return
+            end
+        end
+        saveCurrentSkin()
+    end
+})
+
+SkinSection:Divider()
+
+local skinDropdown = SkinSection:Dropdown({
+    Name = "Saved Skins",
+    Options = getSkinNames,
+    Search = true,
+    MultiSelect = false,
+    Flag = "JXU_SelectedSkin",
+    Settings = {
+        {
+            Type = "Toggle",
+            Name = "Load Animations",
+            Default = false,
+            Flag = "JXU_SkinLoadAnimations",
+            Callback = function(value)
+                skinLoadAnimations = value == true
+            end
+        }
+    },
+    Callback = function(value)
+        if type(value) == "table" then
+            selectedSkin = nil
+            for option, isSelected in pairs(value) do
+                if isSelected then
+                    selectedSkin = findSkinByOption(option)
+                    if selectedSkin then break end
+                end
+            end
+        else
+            selectedSkin = findSkinByOption(value)
+        end
+    end
+})
+
+SkinSection:Button({
+    Name = "Load Skin",
+    Callback = loadSelectedSkin
+})
+
+SkinSection:Button({
+    Name = "Delete Skin",
+    Callback = deleteSelectedSkin
+})
+
+SkinSection:Divider()
+
+SkinSection:Button({
+    Name = "Reset Skin",
+    Callback = resetSkin
+})
+
+LocalPlayer.CharacterAdded:Connect(function(character)
+    task.spawn(function()
+        local humanoid = character:WaitForChild("Humanoid", 10)
+        if not humanoid then return end
+        task.wait(0.5)
+        if not activeSkinData then
+            local okDescription, description = pcall(function()
+                return humanoid:GetAppliedDescription()
+            end)
+            if okDescription then
+                local okData, data = pcall(descriptionToSkinData, description)
+                pcall(function() description:Destroy() end)
+                if okData then originalSkinData = data end
+            end
+        end
+    end)
+end)
 
 --==================================================
 -- CHARACTER
