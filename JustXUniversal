@@ -738,6 +738,10 @@ local function descriptionToSkinData(description)
             usedSourceAccessories[matchedAccessory] = true
             local handle = matchedAccessory:FindFirstChild("Handle")
             local attachment = handle and handle:FindFirstChildOfClass("Attachment")
+            local constraint = handle and handle:FindFirstChild("AccessoryRigidConstraint")
+            if constraint and constraint:IsA("RigidConstraint") and constraint.Attachment0 then
+                attachment = constraint.Attachment0
+            end
             local rigEntry = {
                 Index = index,
                 AccessoryType = accessoryType,
@@ -754,7 +758,6 @@ local function descriptionToSkinData(description)
                 rigEntry.AttachmentCFrame = {cf:GetComponents()}
             end
 
-            local constraint = handle and handle:FindFirstChild("AccessoryRigidConstraint")
             if constraint and constraint:IsA("RigidConstraint") then
                 local attachment0 = constraint.Attachment0
                 local attachment1 = constraint.Attachment1
@@ -1201,6 +1204,12 @@ local function applySkinAccessoryRefinements(model, data)
                         local attachment = handle:FindFirstChildOfClass("Attachment")
                         if attachment then
                             attachment.CFrame = attachment.CFrame * offset
+                        else
+                            local weld = handle:FindFirstChildOfClass("Weld")
+                                or handle:FindFirstChildOfClass("ManualWeld")
+                            if weld and weld:IsA("Weld") then
+                                weld.C0 = weld.C0 * offset
+                            end
                         end
                         if scale ~= Vector3.one then
                             handle.Size = handle.Size * scale
