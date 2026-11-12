@@ -675,6 +675,100 @@ local function descriptionToSkinData(description)
         end
     end
 
+    local sourceAccessories = {}
+    if character then
+        for _, instance in ipairs(character:GetChildren()) do
+            if instance:IsA("Accessory") then
+                table.insert(sourceAccessories, instance)
+            end
+        end
+    end
+
+    local usedSourceAccessories = {}
+    local attachmentNamesByType = {
+        Face = {"FaceCenterAttachment", "FaceFrontAttachment", "FaceLeftAttachment", "FaceRightAttachment"},
+        Front = {"BodyFrontAttachment"},
+        Back = {"BodyBackAttachment"},
+        Hair = {"HairAttachment"},
+        Hat = {"HatAttachment"},
+        Neck = {"NeckAttachment"},
+        Shoulder = {"LeftShoulderAttachment", "RightShoulderAttachment"},
+        Waist = {"WaistCenterAttachment", "WaistFrontAttachment", "WaistBackAttachment", "WaistLeftAttachment", "WaistRightAttachment"}
+    }
+
+    data.AccessoryRigData = {}
+    for index, descriptionAccessory in ipairs(accessories or {}) do
+        local accessoryType = tostring(descriptionAccessory.AccessoryType or "")
+        accessoryType = accessoryType:match("%.([^%.]+)$") or accessoryType
+        local isLayered = descriptionAccessory.IsLayered == true
+        local matchedAccessory
+
+        if isLayered then
+            local wantedOrder = tonumber(descriptionAccessory.Order)
+            for _, candidate in ipairs(sourceAccessories) do
+                if not usedSourceAccessories[candidate] then
+                    local handle = candidate:FindFirstChild("Handle")
+                    local wrap = handle and handle:FindFirstChildOfClass("WrapLayer")
+                    if wrap and tonumber(wrap.Order) == wantedOrder then
+                        matchedAccessory = candidate
+                        break
+                    end
+                end
+            end
+        else
+            local allowedNames = attachmentNamesByType[accessoryType] or {}
+            for _, candidate in ipairs(sourceAccessories) do
+                if not usedSourceAccessories[candidate] then
+                    local handle = candidate:FindFirstChild("Handle")
+                    local attachment = handle and handle:FindFirstChildOfClass("Attachment")
+                    if attachment then
+                        for _, allowedName in ipairs(allowedNames) do
+                            if attachment.Name == allowedName then
+                                matchedAccessory = candidate
+                                break
+                            end
+                        end
+                    end
+                    if matchedAccessory then break end
+                end
+            end
+        end
+
+        if matchedAccessory then
+            usedSourceAccessories[matchedAccessory] = true
+            local handle = matchedAccessory:FindFirstChild("Handle")
+            local attachment = handle and handle:FindFirstChildOfClass("Attachment")
+            local rigEntry = {
+                Index = index,
+                AccessoryType = accessoryType,
+                IsLayered = isLayered,
+                AttachmentName = attachment and attachment.Name or nil
+            }
+
+            if isLayered then
+                rigEntry.Order = tonumber(descriptionAccessory.Order)
+            end
+
+            if attachment then
+                local cf = attachment.CFrame
+                rigEntry.AttachmentCFrame = {cf:GetComponents()}
+            end
+
+            local constraint = handle and handle:FindFirstChild("AccessoryRigidConstraint")
+            if constraint and constraint:IsA("RigidConstraint") then
+                local attachment0 = constraint.Attachment0
+                local attachment1 = constraint.Attachment1
+                if attachment0 and attachment1 then
+                    rigEntry.HasRigidConstraint = true
+                    rigEntry.BodyPartName = attachment1.Parent and attachment1.Parent.Name or nil
+                    rigEntry.BodyAttachmentName = attachment1.Name
+                end
+            end
+
+            table.insert(data.AccessoryRigData, rigEntry)
+        end
+    end
+
     pcall(function()
         data.Emotes = description:GetEmotes()
     end)
@@ -990,63 +1084,137 @@ end
 
 local function applySkinAccessoryRefinements(model, data)
     local refinements = type(data.AccessoryRefinements) == "table" and data.AccessoryRefinements or {}
-    if not next(refinements) then return 0 end
+    local rigData = type(data.AccessoryRigData) == "table" and data.AccessoryRigData or {}
     local matched = 0
     local used = {}
-    for _, accessory in ipairs(model:GetDescendants()) do
-        if accessory:IsA("Accessory") then
-            local handle = accessory:FindFirstChild("Handle")
-            if handle then
-                local assetId
-                pcall(function() assetId = tonumber(accessory:GetAttribute("AssetId")) end)
-                if not assetId then pcall(function() assetId = tonumber(handle:GetAttribute("AssetId")) end) end
-                if not assetId then
-                    local mesh = handle:FindFirstChildOfClass("SpecialMesh")
-                    if mesh and mesh.MeshId then assetId = tonumber(tostring(mesh.MeshId):match("%d+")) end
+
+    local function decodeCFrame(components)
+        if type(components) ~= "table" or #components ~= 12 then return nil end
+        local values = {}
+        for index = 1, 12 do
+            values[index] = tonumber(components[index])
+            if values[index] == nil then return nil end
+        end
+        return CFrame.new(table.unpack(values))
+    end
+
+    local function findBodyAttachment(name, preferredPart)
+        local preferred = preferredPart and model:FindFirstChild(preferredPart, true)
+        if preferred then
+            local attachment = preferred:FindFirstChild(name)
+            if attachment and attachment:IsA("Attachment") then return attachment end
+        end
+        for _, instance in ipairs(model:GetDescendants()) do
+            if instance:IsA("Attachment") and instance.Name == name then
+                return instance
+            end
+        end
+    end
+
+    for _, entry in ipairs(rigData) do
+        if type(entry) == "table" then
+            local targetAccessory
+            if entry.IsLayered == true and tonumber(entry.Order) then
+                for _, candidate in ipairs(model:GetDescendants()) do
+                    if candidate:IsA("Accessory") and not used[candidate] then
+                        local handle = candidate:FindFirstChild("Handle")
+                        local wrap = handle and handle:FindFirstChildOfClass("WrapLayer")
+                        if wrap and tonumber(wrap.Order) == tonumber(entry.Order) then
+                            targetAccessory = candidate
+                            break
+                        end
+                    end
                 end
-                if not assetId and handle:IsA("MeshPart") and handle.MeshId then
-                    assetId = tonumber(tostring(handle.MeshId):match("%d+"))
+            else
+                for _, candidate in ipairs(model:GetDescendants()) do
+                    if candidate:IsA("Accessory") and not used[candidate] then
+                        local handle = candidate:FindFirstChild("Handle")
+                        local attachment = handle and entry.AttachmentName and handle:FindFirstChild(entry.AttachmentName)
+                        if attachment and attachment:IsA("Attachment") then
+                            targetAccessory = candidate
+                            break
+                        end
+                    end
                 end
-                local key = assetId and tostring(assetId) or accessory.Name
-                local refinement = refinements[key]
-                if type(refinement) == "table" and not used[key] then
-                    local function readVector(value, fallback)
-                        if type(value) ~= "table" then return fallback end
-                        return Vector3.new(
-                            tonumber(value.X or value.x) or fallback.X,
-                            tonumber(value.Y or value.y) or fallback.Y,
-                            tonumber(value.Z or value.z) or fallback.Z
-                        )
-                    end
-                    local position = readVector(refinement.Position, Vector3.zero)
-                    local rotation = readVector(refinement.Rotation, Vector3.zero)
-                    local scale = readVector(refinement.Scale, Vector3.one)
-                    local offset = CFrame.new(position) * CFrame.Angles(
-                        math.rad(rotation.X), math.rad(rotation.Y), math.rad(rotation.Z)
-                    )
-                    local attachment = handle:FindFirstChildOfClass("Attachment")
-                    if attachment then
-                        attachment.CFrame = attachment.CFrame * offset
-                    else
-                        local weld = handle:FindFirstChildOfClass("Weld")
-                            or handle:FindFirstChildOfClass("WeldConstraint")
-                            or handle:FindFirstChildOfClass("ManualWeld")
-                        if weld and weld:IsA("Weld") then weld.C0 = weld.C0 * offset end
-                    end
-                    if scale ~= Vector3.one then
-                        handle.Size = handle.Size * scale
-                        local mesh = handle:FindFirstChildOfClass("SpecialMesh")
-                        if mesh then mesh.Scale = mesh.Scale * scale end
-                    end
-                    used[key] = true
+            end
+
+            if targetAccessory then
+                used[targetAccessory] = true
+                local handle = targetAccessory:FindFirstChild("Handle")
+                local attachment = handle and entry.AttachmentName and handle:FindFirstChild(entry.AttachmentName)
+                local savedCFrame = decodeCFrame(entry.AttachmentCFrame)
+                if attachment and savedCFrame then
+                    attachment.CFrame = savedCFrame
                     matched = matched + 1
+                end
+
+                if entry.HasRigidConstraint == true and handle and attachment then
+                    local existing = handle:FindFirstChild("AccessoryRigidConstraint")
+                    if not (existing and existing:IsA("RigidConstraint")) then
+                        local bodyAttachment = entry.BodyAttachmentName
+                            and findBodyAttachment(entry.BodyAttachmentName, entry.BodyPartName)
+                        if bodyAttachment then
+                            local constraint = Instance.new("RigidConstraint")
+                            constraint.Name = "AccessoryRigidConstraint"
+                            constraint.Attachment0 = attachment
+                            constraint.Attachment1 = bodyAttachment
+                            constraint.Parent = handle
+                        end
+                    end
                 end
             end
         end
     end
+
+    if next(refinements) then
+        for _, accessory in ipairs(model:GetDescendants()) do
+            if accessory:IsA("Accessory") then
+                local handle = accessory:FindFirstChild("Handle")
+                if handle then
+                    local assetId
+                    pcall(function() assetId = tonumber(accessory:GetAttribute("AssetId")) end)
+                    if not assetId then pcall(function() assetId = tonumber(handle:GetAttribute("AssetId")) end) end
+                    if not assetId then
+                        local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+                        if mesh and mesh.MeshId then assetId = tonumber(tostring(mesh.MeshId):match("%d+")) end
+                    end
+                    if not assetId and handle:IsA("MeshPart") and handle.MeshId then
+                        assetId = tonumber(tostring(handle.MeshId):match("%d+"))
+                    end
+                    local key = assetId and tostring(assetId) or accessory.Name
+                    local refinement = refinements[key]
+                    if type(refinement) == "table" then
+                        local function readVector(value, fallback)
+                            if type(value) ~= "table" then return fallback end
+                            return Vector3.new(
+                                tonumber(value.X or value.x) or fallback.X,
+                                tonumber(value.Y or value.y) or fallback.Y,
+                                tonumber(value.Z or value.z) or fallback.Z
+                            )
+                        end
+                        local position = readVector(refinement.Position, Vector3.zero)
+                        local rotation = readVector(refinement.Rotation, Vector3.zero)
+                        local scale = readVector(refinement.Scale, Vector3.one)
+                        local offset = CFrame.new(position) * CFrame.Angles(
+                            math.rad(rotation.X), math.rad(rotation.Y), math.rad(rotation.Z)
+                        )
+                        local attachment = handle:FindFirstChildOfClass("Attachment")
+                        if attachment then
+                            attachment.CFrame = attachment.CFrame * offset
+                        end
+                        if scale ~= Vector3.one then
+                            handle.Size = handle.Size * scale
+                            local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+                            if mesh then mesh.Scale = mesh.Scale * scale end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     return matched
 end
-
 local function getSkinFeetBottomY(model)
     if not model then return nil end
     local footNames = {"LeftFoot", "RightFoot", "Left Leg", "Right Leg"}
