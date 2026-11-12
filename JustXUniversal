@@ -578,7 +578,10 @@ local function descriptionToSkinData(description)
         error("HumanoidDescription is unavailable")
     end
 
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     local data = {
+        RigType = humanoid and humanoid.RigType.Name or "R15",
         Properties = {},
         Accessories = {},
         Emotes = {},
@@ -769,17 +772,30 @@ local function getCurrentHumanoidDescription()
 end
 
 local function saveCurrentSkin()
-    local okDescription, description = pcall(getCurrentHumanoidDescription)
-    if not okDescription then
-        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(description), Type = "Error", Duration = 5}) end
-        return
-    end
+    local skinData
+    if activeSkinData then
+        local okCopy, copiedData = pcall(function()
+            return HttpService:JSONDecode(HttpService:JSONEncode(activeSkinData))
+        end)
+        if not okCopy then
+            if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(copiedData), Type = "Error", Duration = 5}) end
+            return
+        end
+        skinData = copiedData
+    else
+        local okDescription, description = pcall(getCurrentHumanoidDescription)
+        if not okDescription then
+            if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(description), Type = "Error", Duration = 5}) end
+            return
+        end
 
-    local okData, skinData = pcall(descriptionToSkinData, description)
-    pcall(function() description:Destroy() end)
-    if not okData then
-        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(skinData), Type = "Error", Duration = 5}) end
-        return
+        local okData, data = pcall(descriptionToSkinData, description)
+        pcall(function() description:Destroy() end)
+        if not okData then
+            if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(data), Type = "Error", Duration = 5}) end
+            return
+        end
+        skinData = data
     end
 
     local customName = tostring(skinNameInput:Get() or ""):match("^%s*(.-)%s*$")
@@ -853,339 +869,434 @@ local function resolveSkinAnimationMap(description)
     return result
 end
 
-local function getLoadedAsset(assetId)
-    if type(game.GetObjects) ~= "function" then
-        error("This executor does not support game:GetObjects")
-    end
-    local okLoad, objects = pcall(function()
-        return game:GetObjects("rbxassetid://" .. tostring(assetId))
+local function createSkinHumanoidModel(description, rigType)
+    local verification
+    pcall(function()
+        verification = Enum.AssetTypeVerification.ClientOnly
     end)
-    if not okLoad or type(objects) ~= "table" or #objects == 0 then
-        error("Could not load asset " .. tostring(assetId) .. ": " .. tostring(objects))
-    end
-    return objects
+
+    local okCreate, modelOrError = pcall(function()
+        if verification then
+            return Players:CreateHumanoidModelFromDescriptionAsync(description, rigType, verification)
+        end
+        return Players:CreateHumanoidModelFromDescriptionAsync(description, rigType)
+    end)
+    if okCreate and modelOrError then return modelOrError end
+
+    local fallbackOk, fallbackModel = pcall(function()
+        return Players:CreateHumanoidModelFromDescription(description, rigType)
+    end)
+    if fallbackOk and fallbackModel then return fallbackModel end
+
+    error(tostring(modelOrError) .. " | Fallback: " .. tostring(fallbackModel))
 end
 
-local function findAssetClass(objects, className)
-    for _, root in ipairs(objects) do
-        if root:IsA(className) then return root end
-        for _, descendant in ipairs(root:GetDescendants()) do
-            if descendant:IsA(className) then return descendant end
-        end
-    end
-end
+local function resolveSkinAnimationMap(description)
+    local temporaryModel
+    local okResolve, result = pcall(function()
+        temporaryModel = createSkinHumanoidModel(description, Enum.HumanoidRigType.R15)
+        if not temporaryModel then error("Roblox could not create the temporary R15 skin resolver model") end
 
-local function clearLocalSkinInstances(character)
-    for _, child in ipairs(character:GetChildren()) do
-        if child:IsA("Accessory") or child:IsA("Shirt") or child:IsA("Pants")
-            or child:IsA("ShirtGraphic") or child:IsA("BodyColors") then
-            child:Destroy()
-        end
-    end
-    local head = character:FindFirstChild("Head")
-    if head then
-        for _, child in ipairs(head:GetChildren()) do
-            if child:IsA("Decal") and child.Name:lower() == "face" then
-                child:Destroy()
-            end
-        end
-    end
-end
+        local generatedAnimate = temporaryModel:FindFirstChild("Animate")
+        if not generatedAnimate then error("Temporary R15 skin model has no Animate script") end
 
-local function applyLocalBodyColors(character, properties)
-    local bodyColors
-    for _, child in ipairs(character:GetChildren()) do
-        if child:IsA("BodyColors") then bodyColors = child break end
-    end
-    if not bodyColors then
-        bodyColors = Instance.new("BodyColors")
-        bodyColors.Parent = character
-    end
-
-    local colorMap = {
-        HeadColor = "HeadColor3",
-        TorsoColor = "TorsoColor3",
-        LeftArmColor = "LeftArmColor3",
-        RightArmColor = "RightArmColor3",
-        LeftLegColor = "LeftLegColor3",
-        RightLegColor = "RightLegColor3"
-    }
-    for property, bodyProperty in pairs(colorMap) do
-        local saved = properties[property]
-        if type(saved) == "table" and saved.__type == "Color3" then
-            local color = Color3.new(
-                tonumber(saved.R) or 0,
-                tonumber(saved.G) or 0,
-                tonumber(saved.B) or 0
-            )
-            pcall(function() bodyColors[bodyProperty] = color end)
-            local partName = property:gsub("Color$", "")
-            local part = character:FindFirstChild(partName)
-            if part and part:IsA("BasePart") then part.Color = color end
-        end
-    end
-end
-
-local function attachLocalAccessory(character, accessory)
-    local handle = accessory:FindFirstChild("Handle")
-    if not handle or not handle:IsA("BasePart") then
-        error("Accessory has no valid Handle")
-    end
-
-    -- Only inspect the avatar's actual body parts. Attachments inside other
-    -- accessory Handles must never become attachment targets.
-    local bodyAttachments = {}
-    for _, bodyPart in ipairs(character:GetChildren()) do
-        if bodyPart:IsA("BasePart") then
-            for _, descendant in ipairs(bodyPart:GetDescendants()) do
-                if descendant:IsA("Attachment") and descendant.Parent:IsA("BasePart") then
-                    local candidates = bodyAttachments[descendant.Name]
-                    if not candidates then
-                        candidates = {}
-                        bodyAttachments[descendant.Name] = candidates
-                    end
-                    table.insert(candidates, descendant)
-                end
-            end
-        end
-    end
-
-    local function getPreferredBodyPart(attachmentName)
-        local preferences = {
-            BodyFrontAttachment = {"UpperTorso"},
-            BodyBackAttachment = {"UpperTorso"},
-            WaistFrontAttachment = {"LowerTorso"},
-            WaistBackAttachment = {"LowerTorso"},
-            WaistCenterAttachment = {"LowerTorso"},
-            HatAttachment = {"Head"},
-            HairAttachment = {"Head"},
-            FaceCenterAttachment = {"Head"},
-            FaceFrontAttachment = {"Head"},
-            RightGripAttachment = {"RightHand"},
-            LeftGripAttachment = {"LeftHand"}
+        local paths = {
+            idle1 = {"idle", "Animation1"},
+            idle2 = {"idle", "Animation2"},
+            walk = {"walk", "WalkAnim"},
+            run = {"run", "RunAnim"},
+            jump = {"jump", "JumpAnim"},
+            fall = {"fall", "FallAnim"},
+            climb = {"climb", "ClimbAnim"},
+            swim = {"swim", "Swim"},
+            swimidle = {"swimidle", "SwimIdle"}
         }
-        return preferences[attachmentName] or {}
-    end
-
-    local accessoryAttachment
-    local bodyAttachment
-    local gripRotation = CFrame.new()
-    local bestScore = -math.huge
-
-    -- Detect hand-held elongated accessories from their actual geometry.
-    -- This is intentionally asset-agnostic: no names or asset IDs are used.
-    local handleSize = handle.Size
-    local dimensions = {handleSize.X, handleSize.Y, handleSize.Z}
-    table.sort(dimensions)
-    local elongationRatio = dimensions[1] > 0 and dimensions[3] / dimensions[1] or 0
-    local handHeldCandidate = elongationRatio >= 4.5
-    local rightGripCandidates = bodyAttachments.RightGripAttachment
-
-    if handHeldCandidate and rightGripCandidates then
-        for _, candidate in ipairs(rightGripCandidates) do
-            if candidate.Parent.Name == "RightHand" then
-                for _, descendant in ipairs(handle:GetDescendants()) do
-                    if descendant:IsA("Attachment") then
-                        accessoryAttachment = descendant
-                        bodyAttachment = candidate
-                        gripRotation = CFrame.Angles(math.rad(90), 0, 0)
-                        break
-                    end
-                end
-                if bodyAttachment then break end
+        local animations = {}
+        for target, path in pairs(paths) do
+            local animation = findGeneratedAnimation(generatedAnimate, path)
+            if animation and animation:IsA("Animation") and animation.AnimationId ~= "" then
+                animations[target] = animation.AnimationId:gsub("^rbxassetid://", "")
             end
         end
+        if not next(animations) then error("No animation IDs could be resolved from this skin") end
+        return animations
+    end)
+
+    if temporaryModel then
+        pcall(function() temporaryModel:Destroy() end)
     end
-
-    if not accessoryAttachment or not bodyAttachment then
-        accessoryAttachment = nil
-        bodyAttachment = nil
-        for _, descendant in ipairs(handle:GetDescendants()) do
-            if descendant:IsA("Attachment") then
-                local candidates = bodyAttachments[descendant.Name]
-                if candidates then
-                    local preferredParts = getPreferredBodyPart(descendant.Name)
-                    for _, candidate in ipairs(candidates) do
-                        local score = 0
-                        for index, partName in ipairs(preferredParts) do
-                            if candidate.Parent.Name == partName then
-                                score = 100 - index
-                                break
-                            end
-                        end
-                        if score > bestScore then
-                            bestScore = score
-                            accessoryAttachment = descendant
-                            bodyAttachment = candidate
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if not accessoryAttachment or not bodyAttachment then
-        error("No matching avatar body attachment found for " .. accessory.Name)
-    end
-
-    accessory.Parent = character
-    handle.Anchored = false
-    handle.CanCollide = false
-    handle.CanTouch = false
-    handle.CanQuery = false
-    handle.Massless = true
-    handle.CFrame = bodyAttachment.WorldCFrame * gripRotation * accessoryAttachment.CFrame:Inverse()
-
-    for _, descendant in ipairs(handle:GetDescendants()) do
-        if descendant:IsA("Weld") or descendant:IsA("WeldConstraint") then
-            descendant:Destroy()
-        end
-    end
-
-    local weld = Instance.new("WeldConstraint")
-    weld.Name = "JustXSkinAccessoryWeld"
-    weld.Part0 = handle
-    weld.Part1 = bodyAttachment.Parent
-    weld.Parent = handle
-    return true
+    if not okResolve then error(result) end
+    return result
 end
 
-local function addLocalAsset(character, humanoid, assetId, className, isLayered)
-    assetId = tonumber(assetId)
-    if not assetId or assetId <= 0 then return false end
+local function getSkinFeetBottomY(model)
+    if not model then return nil end
+    local footNames = {"LeftFoot", "RightFoot", "Left Leg", "Right Leg"}
+    local lowestY = math.huge
+    local foundFoot = false
+    local seen = {}
 
-    local objects = getLoadedAsset(assetId)
-    local source = findAssetClass(objects, className)
-    if not source then
-        for _, object in ipairs(objects) do pcall(function() object:Destroy() end) end
-        error("Asset " .. tostring(assetId) .. " did not contain " .. className)
-    end
-
-    local clone = source:Clone()
-    local okAdd, addError = true, nil
-    local warning
-
-    if clone:IsA("Accessory") then
-        local handle = clone:FindFirstChild("Handle")
-        local wrapLayer = handle and handle:FindFirstChildWhichIsA("WrapLayer", true)
-        local wrapEnabled = false
-        if wrapLayer then
-            local okEnabled, enabled = pcall(function()
-                return wrapLayer.Enabled
-            end)
-            wrapEnabled = okEnabled and enabled == true
-        end
-
-        local hasWrapTarget = false
-        for _, descendant in ipairs(character:GetDescendants()) do
-            if descendant:IsA("WrapTarget") then
-                hasWrapTarget = true
-                break
-            end
-        end
-
-        -- The actual asset structure takes priority over AccessoryType and
-        -- HumanoidDescription metadata. A disabled WrapLayer is explicitly
-        -- treated as absent by Roblox, so the accessory uses its Attachment.
-        if wrapLayer and wrapEnabled then
-            if not hasWrapTarget then
-                okAdd = false
-                addError = "Enabled WrapLayer found, but the character has no WrapTarget"
-            else
-                okAdd, addError = pcall(function()
-                    humanoid:AddAccessory(clone)
-                end)
-                if not okAdd then
-                    addError = "Layered accessory could not be attached: " .. tostring(addError)
+    for _, footName in ipairs(footNames) do
+        local foot = model:FindFirstChild(footName, true)
+        if foot and foot:IsA("BasePart") and not seen[foot] then
+            seen[foot] = true
+            foundFoot = true
+            local halfSize = foot.Size / 2
+            for _, x in ipairs({-halfSize.X, halfSize.X}) do
+                for _, y in ipairs({-halfSize.Y, halfSize.Y}) do
+                    for _, z in ipairs({-halfSize.Z, halfSize.Z}) do
+                        local worldPosition = foot.CFrame:PointToWorldSpace(Vector3.new(x, y, z))
+                        lowestY = math.min(lowestY, worldPosition.Y)
+                    end
                 end
             end
-        else
-            if isLayered then
-                warning = wrapLayer
-                    and "Layer metadata says layered, but WrapLayer is disabled; using its real Attachment"
-                    or "Layer metadata says layered, but no WrapLayer exists; checking its real Attachment"
-            end
-            okAdd, addError = pcall(attachLocalAccessory, character, clone)
         end
-    else
-        okAdd, addError = pcall(function()
-            clone.Parent = character
+    end
+
+    return foundFoot and lowestY or nil
+end
+
+local skinPreviewModel
+local skinPreviewCharacter
+local skinPreviewRoot
+local skinPreviewOffset = Vector3.zero
+local skinPreviewConnections = {}
+local hiddenSkinParts = {}
+local hiddenSkinDecals = {}
+local skinPreviewBuilding = false
+local skinPreviewBuildToken = 0
+local skinAnimationSync
+local skinAnimationCleanup
+local skinPreviewHiddenInFirstPerson = false
+local previousSkinAnimationMap
+
+local function disconnectSkinPreviewConnections()
+    for name, connection in pairs(skinPreviewConnections) do
+        if connection then
+            pcall(function() connection:Disconnect() end)
+        end
+        skinPreviewConnections[name] = nil
+    end
+end
+
+local function restoreSkinCharacter()
+    for part, oldTransparency in pairs(hiddenSkinParts) do
+        pcall(function()
+            if part and part.Parent then part.LocalTransparencyModifier = oldTransparency end
+        end)
+    end
+    table.clear(hiddenSkinParts)
+
+    for decal, oldTransparency in pairs(hiddenSkinDecals) do
+        pcall(function()
+            if decal and decal.Parent then decal.Transparency = oldTransparency end
+        end)
+    end
+    table.clear(hiddenSkinDecals)
+end
+
+local function hideSkinCharacterInstance(instance, character)
+    if not instance or not character or not instance:IsDescendantOf(character) then return end
+    if instance:FindFirstAncestorOfClass("Tool") then return end
+
+    if instance:IsA("BasePart") then
+        if hiddenSkinParts[instance] == nil then
+            hiddenSkinParts[instance] = instance.LocalTransparencyModifier
+        end
+        instance.LocalTransparencyModifier = 1
+    elseif instance:IsA("Decal") or instance:IsA("Texture") then
+        if hiddenSkinDecals[instance] == nil then
+            hiddenSkinDecals[instance] = instance.Transparency
+        end
+        instance.Transparency = 1
+    end
+end
+
+local function setSkinPreviewVisibility(model, hidden)
+    if not model then return end
+    for _, instance in ipairs(model:GetDescendants()) do
+        if instance:IsA("BasePart") then
+            instance.LocalTransparencyModifier = hidden and 1 or 0
+        elseif instance:IsA("Decal") or instance:IsA("Texture") then
+            instance.Transparency = hidden and 1 or 0
+        end
+    end
+end
+
+local function isSkinFirstPerson(character)
+    local camera = workspace.CurrentCamera
+    local head = character and character:FindFirstChild("Head", true)
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not camera or not head or not humanoid then return false end
+
+    local cameraDistance = (camera.CFrame.Position - head.Position).Magnitude
+    local cameraFollowsCharacter = camera.CameraSubject == humanoid
+        or (camera.CameraSubject and camera.CameraSubject:IsDescendantOf(character))
+    return cameraFollowsCharacter and cameraDistance <= 1.65
+end
+
+local function bindSkinAnimationSync(character, model)
+    local playerHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local cloneHumanoid = model and model:FindFirstChildOfClass("Humanoid")
+    if not playerHumanoid or not cloneHumanoid then return function() end, function() end end
+
+    local playerAnimator = playerHumanoid:FindFirstChildOfClass("Animator")
+    local cloneAnimator = cloneHumanoid:FindFirstChildOfClass("Animator")
+    if not cloneAnimator then
+        cloneAnimator = Instance.new("Animator")
+        cloneAnimator.Parent = cloneHumanoid
+    end
+    if not playerAnimator then return function() end, function() end end
+
+    local mirroredTracks = {}
+
+    local function stopMirroredTrack(sourceTrack)
+        local entry = mirroredTracks[sourceTrack]
+        if not entry then return end
+        pcall(function() entry.Track:Stop(0.08) end)
+        pcall(function() entry.Track:Destroy() end)
+        pcall(function() entry.Animation:Destroy() end)
+        mirroredTracks[sourceTrack] = nil
+    end
+
+    local function cleanup()
+        for sourceTrack in pairs(mirroredTracks) do
+            stopMirroredTrack(sourceTrack)
+        end
+    end
+
+    local function sync()
+        if not model.Parent or not character.Parent then return end
+
+        local activeSources = {}
+        for _, sourceTrack in ipairs(playerAnimator:GetPlayingAnimationTracks()) do
+            local sourceAnimation = sourceTrack.Animation
+            local animationId = sourceAnimation and sourceAnimation.AnimationId
+            if sourceTrack.IsPlaying and type(animationId) == "string" and animationId ~= "" then
+                activeSources[sourceTrack] = true
+                local entry = mirroredTracks[sourceTrack]
+
+                if not entry or entry.AnimationId ~= animationId then
+                    if entry then stopMirroredTrack(sourceTrack) end
+
+                    local animation = Instance.new("Animation")
+                    animation.AnimationId = animationId
+                    local okLoad, cloneTrack = pcall(function()
+                        return cloneAnimator:LoadAnimation(animation)
+                    end)
+
+                    if okLoad and cloneTrack then
+                        entry = {
+                            Track = cloneTrack,
+                            Animation = animation,
+                            AnimationId = animationId
+                        }
+                        mirroredTracks[sourceTrack] = entry
+                        pcall(function() cloneTrack.Priority = sourceTrack.Priority end)
+                        pcall(function() cloneTrack.Looped = sourceTrack.Looped end)
+                        pcall(function()
+                            cloneTrack:Play(0.05, math.max(sourceTrack.WeightCurrent, 0.001), sourceTrack.Speed)
+                        end)
+                    else
+                        pcall(function() animation:Destroy() end)
+                        entry = nil
+                    end
+                end
+
+                if entry then
+                    local cloneTrack = entry.Track
+                    pcall(function() cloneTrack.Priority = sourceTrack.Priority end)
+                    pcall(function() cloneTrack.Looped = sourceTrack.Looped end)
+                    pcall(function() cloneTrack:AdjustSpeed(sourceTrack.Speed) end)
+                    pcall(function() cloneTrack:AdjustWeight(sourceTrack.WeightCurrent, 0.05) end)
+
+                    if sourceTrack.Length > 0 and cloneTrack.Length > 0 then
+                        local difference = math.abs(sourceTrack.TimePosition - cloneTrack.TimePosition)
+                        if difference > 0.15 then
+                            pcall(function() cloneTrack.TimePosition = sourceTrack.TimePosition end)
+                        end
+                    end
+                end
+            end
+        end
+
+        for sourceTrack in pairs(mirroredTracks) do
+            if not activeSources[sourceTrack] or not sourceTrack.IsPlaying then
+                stopMirroredTrack(sourceTrack)
+            end
+        end
+    end
+
+    return sync, cleanup
+end
+
+local function clearSkinPreview()
+    disconnectSkinPreviewConnections()
+
+    if skinAnimationCleanup then
+        pcall(skinAnimationCleanup)
+        skinAnimationCleanup = nil
+    end
+    skinAnimationSync = nil
+
+    if skinPreviewModel then
+        pcall(function() skinPreviewModel:Destroy() end)
+        skinPreviewModel = nil
+    end
+
+    skinPreviewCharacter = nil
+    skinPreviewRoot = nil
+    skinPreviewOffset = Vector3.zero
+    skinPreviewHiddenInFirstPerson = false
+    restoreSkinCharacter()
+end
+
+local function prepareSkinPreviewModel(model)
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+        humanoid.RequiresNeck = false
+        humanoid.AutomaticScalingEnabled = false
+        pcall(function() humanoid.EvaluateStateMachine = false end)
+        pcall(function()
+            for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
+                if state ~= Enum.HumanoidStateType.None then
+                    humanoid:SetStateEnabled(state, false)
+                end
+            end
+            humanoid:ChangeState(Enum.HumanoidStateType.None)
         end)
     end
 
-    for _, object in ipairs(objects) do pcall(function() object:Destroy() end) end
-    if not okAdd then
-        pcall(function() clone:Destroy() end)
-        error(addError)
+    local root = model:FindFirstChild("HumanoidRootPart", true) or model.PrimaryPart
+    if not root or not root:IsA("BasePart") then
+        error("Generated skin model has no HumanoidRootPart")
     end
-    return true, warning
+
+    model.PrimaryPart = root
+    for _, instance in ipairs(model:GetDescendants()) do
+        if instance:IsA("BasePart") then
+            instance.Anchored = instance == root
+            instance.CanCollide = false
+            instance.CanTouch = false
+            instance.CanQuery = false
+            instance.Massless = true
+            instance.LocalTransparencyModifier = 1
+        elseif instance:IsA("Decal") or instance:IsA("Texture") then
+            instance.Transparency = 1
+        elseif instance:IsA("Script") or instance:IsA("LocalScript") then
+            pcall(function() instance.Disabled = true end)
+        end
+    end
+
+    return root
 end
 
-local function applyLocalSkinData(data)
+local function buildLocalSkinPreview(data)
     if type(data) ~= "table" or type(data.Properties) ~= "table" then
         error("Saved skin data is invalid")
     end
 
     local character = LocalPlayer.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    if not character or not humanoid then error("Current character is unavailable") end
+    local characterRoot = character and (character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart)
+    if not character or not character.Parent or not humanoid or not characterRoot then
+        error("Current character is unavailable")
+    end
 
-    clearLocalSkinInstances(character)
-    applyLocalBodyColors(character, data.Properties)
+    skinPreviewBuildToken = skinPreviewBuildToken + 1
+    local buildToken = skinPreviewBuildToken
+    local description = skinDataToDescription(data)
+    local rigType = humanoid.RigType
+    if data.RigType == "R6" then
+        rigType = Enum.HumanoidRigType.R6
+    elseif data.RigType == "R15" then
+        rigType = Enum.HumanoidRigType.R15
+    end
 
-    local properties = data.Properties
-    local assetWarnings = {}
-    local clothing = {
-        {Property = "Shirt", Class = "Shirt"},
-        {Property = "Pants", Class = "Pants"},
-        {Property = "GraphicTShirt", Class = "ShirtGraphic"},
-        {Property = "Face", Class = "Decal"}
-    }
-    for _, item in ipairs(clothing) do
-        local assetId = tonumber(properties[item.Property])
-        if assetId and assetId > 0 then
-            local okAsset, assetError = pcall(addLocalAsset, character, humanoid, assetId, item.Class)
-            if not okAsset then
-                table.insert(assetWarnings, item.Property .. " (" .. tostring(assetError) .. ")")
-                if item.Property == "Face" then
-                    local head = character:FindFirstChild("Head")
-                    if head then
-                        local face = Instance.new("Decal")
-                        face.Name = "face"
-                        face.Face = Enum.NormalId.Front
-                        face.Texture = "rbxassetid://" .. tostring(assetId)
-                        face.Parent = head
-                    end
-                end
-            end
+    local okCreate, modelOrError = pcall(function()
+        return createSkinHumanoidModel(description, rigType)
+    end)
+    pcall(function() description:Destroy() end)
+    if not okCreate or not modelOrError or not modelOrError:IsA("Model") then
+        error(tostring(modelOrError))
+    end
+
+    local model = modelOrError
+    local setupOk, setupError = pcall(function()
+        model.Name = "JustXSkinPreview"
+        local root = prepareSkinPreviewModel(model)
+        root.CFrame = characterRoot.CFrame + Vector3.new(0, 100, 0)
+        model.Parent = workspace
+        RunService.Heartbeat:Wait()
+
+        if buildToken ~= skinPreviewBuildToken or LocalPlayer.Character ~= character then
+            error("Skin loading was cancelled")
         end
-    end
 
-    for _, accessory in ipairs(type(data.Accessories) == "table" and data.Accessories or {}) do
-        local assetId = tonumber(accessory.AssetId)
-        if assetId and assetId > 0 then
-            local isLayered = accessory.IsLayered == true
-                or accessory.AccessoryType == "TShirt"
-                or accessory.AccessoryType == "Shirt"
-                or accessory.AccessoryType == "Pants"
-                or accessory.AccessoryType == "Jacket"
-                or accessory.AccessoryType == "Sweater"
-                or accessory.AccessoryType == "Shorts"
-                or accessory.AccessoryType == "LeftShoe"
-                or accessory.AccessoryType == "RightShoe"
-                or accessory.AccessoryType == "DressSkirt"
-            local okAsset, added, warning = pcall(addLocalAsset, character, humanoid, assetId, "Accessory", isLayered)
-            if not okAsset or not added then
-                table.insert(assetWarnings, "Accessory " .. tostring(assetId) .. " (" .. tostring(okAsset and warning or added) .. ")")
-            elseif warning then
-                table.insert(assetWarnings, "Accessory " .. tostring(assetId) .. ": " .. warning)
-            end
+        characterRoot = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
+        if not characterRoot then error("Current character root disappeared") end
+        root.CFrame = characterRoot.CFrame
+        RunService.Heartbeat:Wait()
+
+        local characterFeetY = getSkinFeetBottomY(character)
+        local modelFeetY = getSkinFeetBottomY(model)
+        local offsetY = characterFeetY and modelFeetY and (characterFeetY - modelFeetY) or 0
+
+        clearSkinPreview()
+        if LocalPlayer.Character ~= character or not character.Parent then
+            error("Character changed while the skin was loading")
         end
+
+        skinPreviewModel = model
+        skinPreviewCharacter = character
+        skinPreviewRoot = root
+        skinPreviewOffset = Vector3.new(0, offsetY, 0)
+
+        for _, instance in ipairs(character:GetDescendants()) do
+            hideSkinCharacterInstance(instance, character)
+        end
+
+        skinPreviewConnections.Descendant = character.DescendantAdded:Connect(function(instance)
+            hideSkinCharacterInstance(instance, character)
+        end)
+
+        skinAnimationSync, skinAnimationCleanup = bindSkinAnimationSync(character, model)
+        skinPreviewHiddenInFirstPerson = isSkinFirstPerson(character)
+        setSkinPreviewVisibility(model, skinPreviewHiddenInFirstPerson)
+
+        skinPreviewConnections.Render = RunService.RenderStepped:Connect(function()
+            if skinPreviewModel ~= model then return end
+            if not model.Parent or LocalPlayer.Character ~= character or not character.Parent then
+                clearSkinPreview()
+                return
+            end
+
+            local currentCharacterRoot = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
+            if not currentCharacterRoot or not skinPreviewRoot or not skinPreviewRoot.Parent then
+                clearSkinPreview()
+                return
+            end
+
+            skinPreviewRoot.CFrame = currentCharacterRoot.CFrame + skinPreviewOffset
+            if skinAnimationSync then
+                pcall(skinAnimationSync)
+            end
+
+            local hiddenInFirstPerson = isSkinFirstPerson(character)
+            if hiddenInFirstPerson ~= skinPreviewHiddenInFirstPerson then
+                skinPreviewHiddenInFirstPerson = hiddenInFirstPerson
+                setSkinPreviewVisibility(model, hiddenInFirstPerson)
+            end
+        end)
+    end)
+
+    if not setupOk then
+        if skinPreviewModel == model then clearSkinPreview() end
+        pcall(function() model:Destroy() end)
+        error(setupError)
     end
 
-    if #assetWarnings > 0 then
-        return true, "Some assets could not be loaded: " .. table.concat(assetWarnings, "; ")
-    end
     return true
 end
 
@@ -1204,25 +1315,31 @@ local function applySkinData(data, loadAnimations)
         end
     end
 
-    local okApply, applyResult, warning = pcall(applyLocalSkinData, data)
+    if skinPreviewBuilding then
+        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "A skin is already loading", Type = "Info", Duration = 3}) end
+        return false
+    end
+
+    skinPreviewBuilding = true
+    local okApply, applyResult = pcall(buildLocalSkinPreview, data)
+    skinPreviewBuilding = false
     if not okApply or not applyResult then
         if JL.Notify then
-            JL:Notify({Title = "Skin Changer", Desc = tostring(okApply and warning or applyResult), Type = "Error", Duration = 5})
+            JL:Notify({Title = "Skin Changer", Desc = tostring(okApply and "Could not create the local skin model" or applyResult), Type = "Error", Duration = 6})
         end
         return false
     end
 
+    if not activeSkinData and previousSkinAnimationMap == nil then
+        previousSkinAnimationMap = table.clone(activeAnimationMap)
+    end
     activeSkinData = data
+
     if loadAnimations and nextAnimationMap then
         activeAnimationMap = nextAnimationMap
+        queueAnimationReapply(true)
     end
 
-    if warning and JL.Notify then
-        JL:Notify({Title = "Skin Changer", Desc = warning, Type = "Warn", Duration = 7})
-    end
-
-    task.wait(0.35)
-    queueAnimationReapply(true)
     return true
 end
 
@@ -1283,14 +1400,17 @@ local function resetSkin()
         return
     end
 
-    local previousAnimationMap = activeAnimationMap
-    activeAnimationMap = {}
-    if applySkinData(originalSkinData, false) then
-        activeSkinData = nil
-        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin restored", Type = "Success", Duration = 4}) end
-    else
-        activeAnimationMap = previousAnimationMap
+    skinPreviewBuildToken = skinPreviewBuildToken + 1
+    clearSkinPreview()
+    activeSkinData = nil
+
+    if previousSkinAnimationMap ~= nil then
+        activeAnimationMap = previousSkinAnimationMap
+        previousSkinAnimationMap = nil
+        queueAnimationReapply(true)
     end
+
+    if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin restored", Type = "Success", Duration = 4}) end
 end
 
 loadSkinConfig()
@@ -1381,10 +1501,12 @@ SkinSection:Button({
 })
 
 LocalPlayer.CharacterAdded:Connect(function(character)
+    clearSkinPreview()
     task.spawn(function()
         local humanoid = character:WaitForChild("Humanoid", 10)
         if not humanoid then return end
         task.wait(0.5)
+
         if not activeSkinData then
             local okDescription, description = pcall(function()
                 return humanoid:GetAppliedDescription()
@@ -1394,6 +1516,8 @@ LocalPlayer.CharacterAdded:Connect(function(character)
                 pcall(function() description:Destroy() end)
                 if okData then originalSkinData = data end
             end
+        elseif LocalPlayer.Character == character then
+            applySkinData(activeSkinData, skinLoadAnimations)
         end
     end)
 end)
