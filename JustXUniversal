@@ -1257,8 +1257,6 @@ local function buildLocalSkinPreview(data)
     local setupOk, setupError = pcall(function()
         model.Name = "JustXSkinPreview"
         local root = prepareSkinPreviewModel(model)
-        skinPreviewConnections.ModelDescendant = model.DescendantAdded:Connect(disableSkinPreviewCollision)
-        skinPreviewConnections.PreSimulation = RunService.PreSimulation:Connect(enforceSkinPreviewNoCollision)
         root.CFrame = characterRoot.CFrame + Vector3.new(0, 100, 0)
         model.Parent = workspace
         enforceSkinPreviewNoCollision()
@@ -1286,6 +1284,14 @@ local function buildLocalSkinPreview(data)
         skinPreviewCharacter = character
         skinPreviewRoot = root
         skinPreviewOffset = Vector3.new(0, offsetY, 0)
+
+        table.clear(skinPreviewCollisionParts)
+        for _, instance in ipairs(model:GetDescendants()) do
+            disableSkinPreviewCollision(instance)
+        end
+        skinPreviewConnections.ModelDescendant = model.DescendantAdded:Connect(disableSkinPreviewCollision)
+        skinPreviewConnections.PreSimulation = RunService.PreSimulation:Connect(enforceSkinPreviewNoCollision)
+        enforceSkinPreviewNoCollision()
 
         for _, instance in ipairs(character:GetDescendants()) do
             hideSkinCharacterInstance(instance, character)
