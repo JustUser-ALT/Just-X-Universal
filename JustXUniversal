@@ -922,6 +922,7 @@ local skinPreviewOffset = Vector3.zero
 local skinPreviewConnections = {}
 local hiddenSkinParts = {}
 local hiddenSkinDecals = {}
+local skinPreviewDecalTransparency = {}
 local skinPreviewBuilding = false
 local skinPreviewBuildToken = 0
 local skinAnimationSync
@@ -977,7 +978,20 @@ local function setSkinPreviewVisibility(model, hidden)
         if instance:IsA("BasePart") then
             instance.LocalTransparencyModifier = hidden and 1 or 0
         elseif instance:IsA("Decal") or instance:IsA("Texture") then
-            instance.Transparency = hidden and 1 or 0
+            local okLocalTransparency = pcall(function()
+                instance.LocalTransparencyModifier = hidden and 1 or 0
+            end)
+            if not okLocalTransparency then
+                if hidden then
+                    if skinPreviewDecalTransparency[instance] == nil then
+                        skinPreviewDecalTransparency[instance] = instance.Transparency
+                    end
+                    instance.Transparency = 1
+                elseif skinPreviewDecalTransparency[instance] ~= nil then
+                    instance.Transparency = skinPreviewDecalTransparency[instance]
+                    skinPreviewDecalTransparency[instance] = nil
+                end
+            end
         end
     end
 end
@@ -1107,6 +1121,7 @@ local function clearSkinPreview()
     skinPreviewRoot = nil
     skinPreviewOffset = Vector3.zero
     skinPreviewHiddenInFirstPerson = false
+    table.clear(skinPreviewDecalTransparency)
     restoreSkinCharacter()
 end
 
@@ -1142,7 +1157,7 @@ local function prepareSkinPreviewModel(model)
             instance.Massless = true
             instance.LocalTransparencyModifier = 1
         elseif instance:IsA("Decal") or instance:IsA("Texture") then
-            instance.Transparency = 1
+            pcall(function() instance.LocalTransparencyModifier = 1 end)
         elseif instance:IsA("Script") or instance:IsA("LocalScript") then
             pcall(function() instance.Disabled = true end)
         end
