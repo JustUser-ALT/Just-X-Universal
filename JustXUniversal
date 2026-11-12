@@ -828,47 +828,6 @@ local function saveCurrentSkin()
     end
 end
 
-local function resolveSkinAnimationMap(description)
-    local temporaryModel
-    local okResolve, result = pcall(function()
-        temporaryModel = Players:CreateHumanoidModelFromDescription(
-            description,
-            Enum.HumanoidRigType.R15
-        )
-        if not temporaryModel then error("Roblox could not create the temporary R15 skin resolver model") end
-
-        local generatedAnimate = temporaryModel:FindFirstChild("Animate")
-        if not generatedAnimate then error("Temporary R15 skin model has no Animate script") end
-
-        local paths = {
-            idle1 = {"idle", "Animation1"},
-            idle2 = {"idle", "Animation2"},
-            walk = {"walk", "WalkAnim"},
-            run = {"run", "RunAnim"},
-            jump = {"jump", "JumpAnim"},
-            fall = {"fall", "FallAnim"},
-            climb = {"climb", "ClimbAnim"},
-            swim = {"swim", "Swim"},
-            swimidle = {"swimidle", "SwimIdle"}
-        }
-        local animations = {}
-        for target, path in pairs(paths) do
-            local animation = findGeneratedAnimation(generatedAnimate, path)
-            if animation and animation:IsA("Animation") and animation.AnimationId ~= "" then
-                animations[target] = animation.AnimationId:gsub("^rbxassetid://", "")
-            end
-        end
-        if not next(animations) then error("No animation IDs could be resolved from this skin") end
-        return animations
-    end)
-
-    if temporaryModel then
-        pcall(function() temporaryModel:Destroy() end)
-    end
-    if not okResolve then error(result) end
-    return result
-end
-
 local function createSkinHumanoidModel(description, rigType)
     local verification
     pcall(function()
