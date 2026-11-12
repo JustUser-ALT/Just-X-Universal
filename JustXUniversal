@@ -853,48 +853,185 @@ local function resolveSkinAnimationMap(description)
     return result
 end
 
-local function applySkinData(data, loadAnimations)
+local function getLoadedAsset(assetId)
+    if type(game.GetObjects) ~= "function" then
+        error("This executor does not support game:GetObjects")
+    end
+    local okLoad, objects = pcall(function()
+        return game:GetObjects("rbxassetid://" .. tostring(assetId))
+    end)
+    if not okLoad or type(objects) ~= "table" or #objects == 0 then
+        error("Could not load asset " .. tostring(assetId) .. ": " .. tostring(objects))
+    end
+    return objects
+end
+
+local function findAssetClass(objects, className)
+    for _, root in ipairs(objects) do
+        if root:IsA(className) then return root end
+        for _, descendant in ipairs(root:GetDescendants()) do
+            if descendant:IsA(className) then return descendant end
+        end
+    end
+end
+
+local function clearLocalSkinInstances(character)
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("Accessory") or child:IsA("Shirt") or child:IsA("Pants")
+            or child:IsA("ShirtGraphic") or child:IsA("BodyColors") then
+            child:Destroy()
+        end
+    end
+    local head = character:FindFirstChild("Head")
+    if head then
+        for _, child in ipairs(head:GetChildren()) do
+            if child:IsA("Decal") and child.Name:lower() == "face" then
+                child:Destroy()
+            end
+        end
+    end
+end
+
+local function applyLocalBodyColors(character, properties)
+    local bodyColors
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("BodyColors") then bodyColors = child break end
+    end
+    if not bodyColors then
+        bodyColors = Instance.new("BodyColors")
+        bodyColors.Parent = character
+    end
+
+    local colorMap = {
+        HeadColor = "HeadColor3",
+        TorsoColor = "TorsoColor3",
+        LeftArmColor = "LeftArmColor3",
+        RightArmColor = "RightArmColor3",
+        LeftLegColor = "LeftLegColor3",
+        RightLegColor = "RightLegColor3"
+    }
+    for property, bodyProperty in pairs(colorMap) do
+        local saved = properties[property]
+        if type(saved) == "table" and saved.__type == "Color3" then
+            local color = Color3.new(
+                tonumber(saved.R) or 0,
+                tonumber(saved.G) or 0,
+                tonumber(saved.B) or 0
+            )
+            pcall(function() bodyColors[bodyProperty] = color end)
+            local partName = property:gsub("Color$", "")
+            local part = character:FindFirstChild(partName)
+            if part and part:IsA("BasePart") then part.Color = color end
+        end
+    end
+end
+
+local function addLocalAsset(character, humanoid, assetId, className)
+    assetId = tonumber(assetId)
+    if not assetId or assetId <= 0 then return false end
+    local objects = getLoadedAsset(assetId)
+    local source = findAssetClass(objects, className)
+    if not source then
+        for _, object in ipairs(objects) do pcall(function() object:Destroy() end) end
+        error("Asset " .. tostring(assetId) .. " did not contain " .. className)
+    end
+    local clone = source:Clone()
+    if clone:IsA("Accessory") then
+        local okAdd = pcall(function() humanoid:AddAccessory(clone) end)
+        if not okAdd then clone.Parent = character end
+    else
+        clone.Parent = character
+    end
+    for _, object in ipairs(objects) do pcall(function() object:Destroy() end) end
+    return true
+end
+
+local function applyLocalSkinData(data)
+    if type(data) ~= "table" or type(data.Properties) ~= "table" then
+        error("Saved skin data is invalid")
+    end
+
     local character = LocalPlayer.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then
-        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Current character Humanoid is unavailable", Type = "Error", Duration = 4}) end
-        return false
-    end
+    if not character or not humanoid then error("Current character is unavailable") end
 
-    local okDescription, description = pcall(skinDataToDescription, data)
-    if not okDescription then
-        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(description), Type = "Error", Duration = 5}) end
-        return false
-    end
+    clearLocalSkinInstances(character)
+    applyLocalBodyColors(character, data.Properties)
 
-    local nextAnimationMap
-    if loadAnimations then
-        local okAnimations, result = pcall(resolveSkinAnimationMap, description)
-        if okAnimations then
-            nextAnimationMap = result
-        else
-            if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Skin loaded, but its animations could not be resolved: " .. tostring(result), Type = "Warn", Duration = 5}) end
+    local properties = data.Properties
+    local assetWarnings = {}
+    local clothing = {
+        {Property = "Shirt", Class = "Shirt"},
+        {Property = "Pants", Class = "Pants"},
+        {Property = "GraphicTShirt", Class = "ShirtGraphic"},
+        {Property = "Face", Class = "Decal"}
+    }
+    for _, item in ipairs(clothing) do
+        local assetId = tonumber(properties[item.Property])
+        if assetId and assetId > 0 then
+            local okAsset, assetError = pcall(addLocalAsset, character, humanoid, assetId, item.Class)
+            if not okAsset then
+                table.insert(assetWarnings, item.Property .. " (" .. tostring(assetError) .. ")")
+                if item.Property == "Face" then
+                    local head = character:FindFirstChild("Head")
+                    if head then
+                        local face = Instance.new("Decal")
+                        face.Name = "face"
+                        face.Face = Enum.NormalId.Front
+                        face.Texture = "rbxassetid://" .. tostring(assetId)
+                        face.Parent = head
+                    end
+                end
+            end
         end
     end
 
-    local okApply, applyError = pcall(function()
-        humanoid:ApplyDescriptionReset(description)
-    end)
-    if not okApply then
-        okApply, applyError = pcall(function()
-            humanoid:ApplyDescription(description)
-        end)
+    for _, accessory in ipairs(type(data.Accessories) == "table" and data.Accessories or {}) do
+        local assetId = tonumber(accessory.AssetId)
+        if assetId and assetId > 0 then
+            local okAsset, assetError = pcall(addLocalAsset, character, humanoid, assetId, "Accessory")
+            if not okAsset then
+                table.insert(assetWarnings, "Accessory " .. tostring(assetId) .. " (" .. tostring(assetError) .. ")")
+            end
+        end
     end
-    pcall(function() description:Destroy() end)
 
-    if not okApply then
-        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = tostring(applyError), Type = "Error", Duration = 5}) end
+    if #assetWarnings > 0 then
+        return true, "Some assets could not be loaded: " .. table.concat(assetWarnings, "; ")
+    end
+    return true
+end
+
+local function applySkinData(data, loadAnimations)
+    local nextAnimationMap
+    if loadAnimations then
+        local okDescription, description = pcall(skinDataToDescription, data)
+        if okDescription then
+            local okAnimations, result = pcall(resolveSkinAnimationMap, description)
+            pcall(function() description:Destroy() end)
+            if okAnimations then
+                nextAnimationMap = result
+            elseif JL.Notify then
+                JL:Notify({Title = "Skin Changer", Desc = "Skin will load, but its animations could not be resolved: " .. tostring(result), Type = "Warn", Duration = 5})
+            end
+        end
+    end
+
+    local okApply, applyResult, warning = pcall(applyLocalSkinData, data)
+    if not okApply or not applyResult then
+        if JL.Notify then
+            JL:Notify({Title = "Skin Changer", Desc = tostring(okApply and warning or applyResult), Type = "Error", Duration = 5})
+        end
         return false
     end
 
     activeSkinData = data
     if loadAnimations and nextAnimationMap then
         activeAnimationMap = nextAnimationMap
+    end
+
+    if warning and JL.Notify then
+        JL:Notify({Title = "Skin Changer", Desc = warning, Type = "Warn", Duration = 7})
     end
 
     task.wait(0.35)
