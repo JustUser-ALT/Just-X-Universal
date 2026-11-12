@@ -72,7 +72,8 @@ handle.CanCollide = false
 handle.CanTouch = false
 handle.CanQuery = false
 handle.Massless = true
-handle.CFrame = grip.WorldCFrame * handleAttachment.CFrame:Inverse()
+local gripRotation = CFrame.Angles(math.rad(90), 0, 0)
+handle.CFrame = grip.WorldCFrame * gripRotation * handleAttachment.CFrame:Inverse()
 
 clone.Parent = character
 
@@ -82,5 +83,5 @@ weld.Part0 = rightHand
 weld.Part1 = handle
 weld.Parent = handle
 
-print("[SwordGripPreview] Preview attached to RightHand.RightGripAttachment.")
+print("[SwordGripPreview] Preview attached to RightHand.RightGripAttachment with X rotation +90 degrees.")
 print("[SwordGripPreview] Run this script again to remove it.")
