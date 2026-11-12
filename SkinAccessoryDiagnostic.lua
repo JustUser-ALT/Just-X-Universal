@@ -97,13 +97,18 @@ for index, root in ipairs(roots) do
     log("ROOT", index)
     dumpTree(root, 0)
 
+    local nodes = {root}
     for _, descendant in ipairs(root:GetDescendants()) do
-        if descendant:IsA("Accessory") then
+        table.insert(nodes, descendant)
+    end
+
+    for _, node in ipairs(nodes) do
+        if node:IsA("Accessory") then
             log("========== ACCESSORY DETAILS ==========")
-            log("Name:", descendant.Name)
-            log("AccessoryType:", safeGet(descendant, "AccessoryType"))
-            log("IsLayered:", safeGet(descendant, "IsLayered"))
-            local handle = descendant:FindFirstChild("Handle")
+            log("Name:", node.Name)
+            log("AccessoryType:", safeGet(node, "AccessoryType"))
+            log("IsLayered:", safeGet(node, "IsLayered"))
+            local handle = node:FindFirstChild("Handle")
             log("Handle:", handle and handle:GetFullName() or "MISSING")
             if handle then
                 for _, child in ipairs(handle:GetChildren()) do
