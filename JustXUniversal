@@ -527,6 +527,7 @@ local SKIN_CONFIG = "JustXUniversal_Skins.json"
 local CATALOG_AVATAR_CREATOR_PLACE_ID = 7041939546
 local skinPacks = {}
 local selectedSkin
+local skinNameInput, skinDropdown
 local originalSkinData
 local activeSkinData
 local skinLoadAnimations = false
@@ -969,7 +970,7 @@ if initialDescriptionOk then
     if initialDataOk then originalSkinData = initialData end
 end
 
-local skinNameInput = SkinSection:Input({
+skinNameInput = SkinSection:Input({
     Name = "Skin Name (Optional)",
     Placeholder = "Leave empty for Skin1",
     Flag = "JXU_SkinNameInput"
@@ -998,7 +999,7 @@ SkinSection:Button({
 
 SkinSection:Divider()
 
-local skinDropdown = SkinSection:Dropdown({
+skinDropdown = SkinSection:Dropdown({
     Name = "Saved Skins",
     Options = getSkinNames,
     Search = true,
