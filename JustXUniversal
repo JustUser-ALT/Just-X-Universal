@@ -639,43 +639,75 @@ local function skinDataToDescription(data)
     end
 
     local description = Instance.new("HumanoidDescription")
+    local accessoryPropertyNames = {
+        BackAccessory = true,
+        FaceAccessory = true,
+        FrontAccessory = true,
+        HairAccessory = true,
+        HatAccessory = true,
+        NeckAccessory = true,
+        ShoulderAccessory = true,
+        ShouldersAccessory = true,
+        WaistAccessory = true
+    }
+
     for property, value in pairs(data.Properties) do
-        if type(property) == "string" then
-            if type(value) == "table" and value.__type == "Color3" then
-                pcall(function()
+        if type(property) == "string" and not accessoryPropertyNames[property] then
+            local okSet, setError = pcall(function()
+                if type(value) == "table" and value.__type == "Color3" then
                     description[property] = Color3.new(
                         tonumber(value.R) or 0,
                         tonumber(value.G) or 0,
                         tonumber(value.B) or 0
                     )
-                end)
-            else
-                pcall(function()
+                else
                     description[property] = value
-                end)
+                end
+            end)
+            if not okSet then
+                pcall(function() description:Destroy() end)
+                error("Could not restore HumanoidDescription property " .. property .. ": " .. tostring(setError))
             end
         end
     end
 
     local accessories = {}
-    for _, accessory in ipairs(type(data.Accessories) == "table" and data.Accessories or {}) do
-        local accessoryType
-        pcall(function()
-            accessoryType = Enum.AccessoryType[accessory.AccessoryType]
-        end)
-        if accessoryType and tonumber(accessory.AssetId) then
-            table.insert(accessories, {
-                AssetId = tonumber(accessory.AssetId),
-                AccessoryType = accessoryType,
-                IsLayered = accessory.IsLayered == true,
-                Order = tonumber(accessory.Order) or 0,
-                Puffiness = tonumber(accessory.Puffiness) or 1
-            })
+    local savedAccessories = type(data.Accessories) == "table" and data.Accessories or {}
+    for _, accessory in ipairs(savedAccessories) do
+        if type(accessory) == "table" then
+            local accessoryType
+            pcall(function()
+                accessoryType = Enum.AccessoryType[accessory.AccessoryType]
+            end)
+            local assetId = tonumber(accessory.AssetId)
+            if accessoryType and assetId and assetId > 0 then
+                table.insert(accessories, {
+                    AssetId = assetId,
+                    AccessoryType = accessoryType,
+                    IsLayered = accessory.IsLayered == true,
+                    Order = tonumber(accessory.Order) or 0,
+                    Puffiness = tonumber(accessory.Puffiness) or 1
+                })
+            end
         end
     end
-    pcall(function()
-        description:SetAccessories(accessories, true)
-    end)
+
+    if #accessories > 0 then
+        local okAccessories, accessoryError = pcall(function()
+            description:SetAccessories(accessories, true)
+        end)
+        if not okAccessories then
+            pcall(function() description:Destroy() end)
+            error("HumanoidDescription:SetAccessories failed: " .. tostring(accessoryError))
+        end
+    else
+        for property in pairs(accessoryPropertyNames) do
+            local value = data.Properties[property]
+            if value ~= nil then
+                pcall(function() description[property] = tostring(value) end)
+            end
+        end
+    end
     pcall(function()
         description:SetEmotes(type(data.Emotes) == "table" and data.Emotes or {})
     end)
@@ -923,6 +955,7 @@ local skinPreviewConnections = {}
 local hiddenSkinParts = {}
 local hiddenSkinDecals = {}
 local skinPreviewDecalTransparency = {}
+local skinPreviewCollisionParts = {}
 local skinPreviewBuilding = false
 local skinPreviewBuildToken = 0
 local skinAnimationSync
@@ -992,6 +1025,32 @@ local function setSkinPreviewVisibility(model, hidden)
                     skinPreviewDecalTransparency[instance] = nil
                 end
             end
+        end
+    end
+end
+
+local function disableSkinPreviewCollision(instance)
+    if not instance or not instance:IsA("BasePart") then return end
+    skinPreviewCollisionParts[instance] = true
+    pcall(function()
+        instance.CanCollide = false
+        instance.CanTouch = false
+        instance.CanQuery = false
+        instance.Massless = true
+    end)
+end
+
+local function enforceSkinPreviewNoCollision()
+    for instance in pairs(skinPreviewCollisionParts) do
+        if instance and instance.Parent then
+            pcall(function()
+                if instance.CanCollide then instance.CanCollide = false end
+                if instance.CanTouch then instance.CanTouch = false end
+                if instance.CanQuery then instance.CanQuery = false end
+                if not instance.Massless then instance.Massless = true end
+            end)
+        else
+            skinPreviewCollisionParts[instance] = nil
         end
     end
 end
@@ -1122,6 +1181,7 @@ local function clearSkinPreview()
     skinPreviewOffset = Vector3.zero
     skinPreviewHiddenInFirstPerson = false
     table.clear(skinPreviewDecalTransparency)
+    table.clear(skinPreviewCollisionParts)
     restoreSkinCharacter()
 end
 
@@ -1151,10 +1211,7 @@ local function prepareSkinPreviewModel(model)
     for _, instance in ipairs(model:GetDescendants()) do
         if instance:IsA("BasePart") then
             instance.Anchored = instance == root
-            instance.CanCollide = false
-            instance.CanTouch = false
-            instance.CanQuery = false
-            instance.Massless = true
+            disableSkinPreviewCollision(instance)
             instance.LocalTransparencyModifier = 1
         elseif instance:IsA("Decal") or instance:IsA("Texture") then
             pcall(function() instance.LocalTransparencyModifier = 1 end)
@@ -1200,8 +1257,11 @@ local function buildLocalSkinPreview(data)
     local setupOk, setupError = pcall(function()
         model.Name = "JustXSkinPreview"
         local root = prepareSkinPreviewModel(model)
+        skinPreviewConnections.ModelDescendant = model.DescendantAdded:Connect(disableSkinPreviewCollision)
+        skinPreviewConnections.PreSimulation = RunService.PreSimulation:Connect(enforceSkinPreviewNoCollision)
         root.CFrame = characterRoot.CFrame + Vector3.new(0, 100, 0)
         model.Parent = workspace
+        enforceSkinPreviewNoCollision()
         RunService.Heartbeat:Wait()
 
         if buildToken ~= skinPreviewBuildToken or LocalPlayer.Character ~= character then
