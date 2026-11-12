@@ -611,17 +611,16 @@ local function descriptionToSkinData(description)
         return description:GetAccessories(true)
     end)
     if okAccessories and type(accessories) == "table" then
-        local characterRefinements
-        pcall(function()
-            local raw = character and character:GetAttribute("AccessoryRefinements")
+        local function mergeAccessoryRefinements(raw)
+            local decoded = raw
             if type(raw) == "string" and raw ~= "" then
-                characterRefinements = HttpService:JSONDecode(raw)
-            elseif type(raw) == "table" then
-                characterRefinements = raw
+                local okDecode, result = pcall(function()
+                    return HttpService:JSONDecode(raw)
+                end)
+                decoded = okDecode and result or nil
             end
-        end)
-        if type(characterRefinements) == "table" then
-            for id, refinement in pairs(characterRefinements) do
+            if type(decoded) ~= "table" then return end
+            for id, refinement in pairs(decoded) do
                 if type(refinement) == "table" then
                     local key = tostring(id)
                     data.AccessoryRefinements[key] = data.AccessoryRefinements[key] or {}
@@ -633,6 +632,14 @@ local function descriptionToSkinData(description)
                 end
             end
         end
+        pcall(function()
+            local raw = character and character:GetAttribute("AccessoryRefinements")
+            if raw then mergeAccessoryRefinements(raw) end
+        end)
+        pcall(function()
+            local raw = description:GetAttribute("AccessoryRefinements")
+            if raw then mergeAccessoryRefinements(raw) end
+        end)
         for _, accessory in ipairs(accessories) do
             local accessoryType = tostring(accessory.AccessoryType or "")
             accessoryType = accessoryType:match("%.([^%.]+)$") or accessoryType
