@@ -969,25 +969,55 @@ local function attachLocalAccessory(character, accessory)
 
     local accessoryAttachment
     local bodyAttachment
+    local gripRotation = CFrame.new()
     local bestScore = -math.huge
 
-    for _, descendant in ipairs(handle:GetDescendants()) do
-        if descendant:IsA("Attachment") then
-            local candidates = bodyAttachments[descendant.Name]
-            if candidates then
-                local preferredParts = getPreferredBodyPart(descendant.Name)
-                for _, candidate in ipairs(candidates) do
-                    local score = 0
-                    for index, partName in ipairs(preferredParts) do
-                        if candidate.Parent.Name == partName then
-                            score = 100 - index
-                            break
-                        end
-                    end
-                    if score > bestScore then
-                        bestScore = score
+    -- Detect hand-held elongated accessories from their actual geometry.
+    -- This is intentionally asset-agnostic: no names or asset IDs are used.
+    local handleSize = handle.Size
+    local dimensions = {handleSize.X, handleSize.Y, handleSize.Z}
+    table.sort(dimensions)
+    local elongationRatio = dimensions[1] > 0 and dimensions[3] / dimensions[1] or 0
+    local handHeldCandidate = elongationRatio >= 4.5
+    local rightGripCandidates = bodyAttachments.RightGripAttachment
+
+    if handHeldCandidate and rightGripCandidates then
+        for _, candidate in ipairs(rightGripCandidates) do
+            if candidate.Parent.Name == "RightHand" then
+                for _, descendant in ipairs(handle:GetDescendants()) do
+                    if descendant:IsA("Attachment") then
                         accessoryAttachment = descendant
                         bodyAttachment = candidate
+                        gripRotation = CFrame.Angles(math.rad(90), 0, 0)
+                        break
+                    end
+                end
+                if bodyAttachment then break end
+            end
+        end
+    end
+
+    if not accessoryAttachment or not bodyAttachment then
+        accessoryAttachment = nil
+        bodyAttachment = nil
+        for _, descendant in ipairs(handle:GetDescendants()) do
+            if descendant:IsA("Attachment") then
+                local candidates = bodyAttachments[descendant.Name]
+                if candidates then
+                    local preferredParts = getPreferredBodyPart(descendant.Name)
+                    for _, candidate in ipairs(candidates) do
+                        local score = 0
+                        for index, partName in ipairs(preferredParts) do
+                            if candidate.Parent.Name == partName then
+                                score = 100 - index
+                                break
+                            end
+                        end
+                        if score > bestScore then
+                            bestScore = score
+                            accessoryAttachment = descendant
+                            bodyAttachment = candidate
+                        end
                     end
                 end
             end
@@ -1004,7 +1034,7 @@ local function attachLocalAccessory(character, accessory)
     handle.CanTouch = false
     handle.CanQuery = false
     handle.Massless = true
-    handle.CFrame = bodyAttachment.WorldCFrame * accessoryAttachment.CFrame:Inverse()
+    handle.CFrame = bodyAttachment.WorldCFrame * gripRotation * accessoryAttachment.CFrame:Inverse()
 
     for _, descendant in ipairs(handle:GetDescendants()) do
         if descendant:IsA("Weld") or descendant:IsA("WeldConstraint") then
