@@ -584,6 +584,7 @@ local function descriptionToSkinData(description)
         RigType = humanoid and humanoid.RigType.Name or "R15",
         Properties = {},
         Accessories = {},
+        AllAccessories = {},
         AccessoryRefinements = {},
         Emotes = {},
         EquippedEmotes = {}
@@ -672,6 +673,7 @@ local function descriptionToSkinData(description)
                 data.AccessoryRefinements[tostring(entry.AssetId)].Scale = entry.Scale
             end
             table.insert(data.Accessories, entry)
+            table.insert(data.AllAccessories, entry)
         end
     end
 
@@ -724,7 +726,9 @@ local function skinDataToDescription(data)
     end
 
     local accessories = {}
-    local savedAccessories = type(data.Accessories) == "table" and data.Accessories or {}
+    local savedAccessories = type(data.AllAccessories) == "table"
+        and data.AllAccessories
+        or (type(data.Accessories) == "table" and data.Accessories or {})
     for _, accessory in ipairs(savedAccessories) do
         if type(accessory) == "table" then
             local accessoryType
