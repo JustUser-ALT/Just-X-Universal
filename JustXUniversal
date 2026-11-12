@@ -1431,7 +1431,7 @@ local function bindSkinAnimationSync(character, model)
                         pcall(function() cloneTrack.Priority = sourceTrack.Priority end)
                         pcall(function() cloneTrack.Looped = sourceTrack.Looped end)
                         pcall(function()
-                            cloneTrack:Play(0.05, math.max(sourceTrack.WeightCurrent, 0.001), sourceTrack.Speed)
+                            cloneTrack:Play(0, math.max(sourceTrack.WeightCurrent, 0.001), sourceTrack.Speed)
                         end)
                     else
                         pcall(function() animation:Destroy() end)
@@ -1444,11 +1444,11 @@ local function bindSkinAnimationSync(character, model)
                     pcall(function() cloneTrack.Priority = sourceTrack.Priority end)
                     pcall(function() cloneTrack.Looped = sourceTrack.Looped end)
                     pcall(function() cloneTrack:AdjustSpeed(sourceTrack.Speed) end)
-                    pcall(function() cloneTrack:AdjustWeight(sourceTrack.WeightCurrent, 0.05) end)
+                    pcall(function() cloneTrack:AdjustWeight(sourceTrack.WeightCurrent, 0) end)
 
                     if sourceTrack.Length > 0 and cloneTrack.Length > 0 then
                         local difference = math.abs(sourceTrack.TimePosition - cloneTrack.TimePosition)
-                        if difference > 0.15 then
+                        if difference > (1 / 60) then
                             pcall(function() cloneTrack.TimePosition = sourceTrack.TimePosition end)
                         end
                     end
