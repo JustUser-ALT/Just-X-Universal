@@ -978,7 +978,7 @@ local function attachLocalAccessory(character, accessory)
     return true
 end
 
-local function addLocalAsset(character, humanoid, assetId, className)
+local function addLocalAsset(character, humanoid, assetId, className, isLayered)
     assetId = tonumber(assetId)
     if not assetId or assetId <= 0 then return false end
     local objects = getLoadedAsset(assetId)
@@ -990,8 +990,32 @@ local function addLocalAsset(character, humanoid, assetId, className)
 
     local clone = source:Clone()
     local okAdd, addError = true, nil
+    local warning
     if clone:IsA("Accessory") then
-        okAdd, addError = pcall(attachLocalAccessory, character, clone)
+        if isLayered then
+            local handle = clone:FindFirstChild("Handle")
+            local wrapLayer = handle and handle:FindFirstChildWhichIsA("WrapLayer", true)
+            if not wrapLayer then
+                okAdd = false
+                addError = "Layered accessory " .. tostring(assetId) .. " has no WrapLayer"
+            else
+                local hasWrapTarget = false
+                for _, descendant in ipairs(character:GetDescendants()) do
+                    if descendant:IsA("WrapTarget") then
+                        hasWrapTarget = true
+                        break
+                    end
+                end
+                if not hasWrapTarget then
+                    warning = "Character has no WrapTarget; layered clothing may not wrap correctly"
+                end
+                okAdd, addError = pcall(function()
+                    humanoid:AddAccessory(clone)
+                end)
+            end
+        else
+            okAdd, addError = pcall(attachLocalAccessory, character, clone)
+        end
     else
         okAdd, addError = pcall(function() clone.Parent = character end)
     end
@@ -1001,9 +1025,8 @@ local function addLocalAsset(character, humanoid, assetId, className)
         pcall(function() clone:Destroy() end)
         error(addError)
     end
-    return true
+    return true, warning
 end
-
 local function applyLocalSkinData(data)
     if type(data) ~= "table" or type(data.Properties) ~= "table" then
         error("Saved skin data is invalid")
@@ -1047,9 +1070,21 @@ local function applyLocalSkinData(data)
     for _, accessory in ipairs(type(data.Accessories) == "table" and data.Accessories or {}) do
         local assetId = tonumber(accessory.AssetId)
         if assetId and assetId > 0 then
-            local okAsset, assetError = pcall(addLocalAsset, character, humanoid, assetId, "Accessory")
-            if not okAsset then
-                table.insert(assetWarnings, "Accessory " .. tostring(assetId) .. " (" .. tostring(assetError) .. ")")
+            local isLayered = accessory.IsLayered == true
+                or accessory.AccessoryType == "TShirt"
+                or accessory.AccessoryType == "Shirt"
+                or accessory.AccessoryType == "Pants"
+                or accessory.AccessoryType == "Jacket"
+                or accessory.AccessoryType == "Sweater"
+                or accessory.AccessoryType == "Shorts"
+                or accessory.AccessoryType == "LeftShoe"
+                or accessory.AccessoryType == "RightShoe"
+                or accessory.AccessoryType == "DressSkirt"
+            local okAsset, added, warning = pcall(addLocalAsset, character, humanoid, assetId, "Accessory", isLayered)
+            if not okAsset or not added then
+                table.insert(assetWarnings, "Accessory " .. tostring(assetId) .. " (" .. tostring(okAsset and warning or added) .. ")")
+            elseif warning then
+                table.insert(assetWarnings, "Accessory " .. tostring(assetId) .. ": " .. warning)
             end
         end
     end
