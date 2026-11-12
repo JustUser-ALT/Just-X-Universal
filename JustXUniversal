@@ -1257,6 +1257,8 @@ local function buildLocalSkinPreview(data)
     local setupOk, setupError = pcall(function()
         model.Name = "JustXSkinPreview"
         local root = prepareSkinPreviewModel(model)
+        skinPreviewConnections.ModelDescendant = model.DescendantAdded:Connect(disableSkinPreviewCollision)
+        skinPreviewConnections.PreSimulation = RunService.PreSimulation:Connect(enforceSkinPreviewNoCollision)
         root.CFrame = characterRoot.CFrame + Vector3.new(0, 100, 0)
         model.Parent = workspace
         enforceSkinPreviewNoCollision()
