@@ -798,10 +798,18 @@ local function saveCurrentSkin()
         return
     end
 
+    local refreshOk, refreshError = true, nil
     if skinDropdown and skinDropdown.Refresh then
-        skinDropdown:Refresh()
+        refreshOk, refreshError = pcall(function()
+            skinDropdown:Refresh()
+        end)
     end
-    if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Saved: " .. savedName, Type = "Success", Duration = 4}) end
+    if JL.Notify then
+        JL:Notify({Title = "Skin Changer", Desc = "Saved: " .. savedName, Type = "Success", Duration = 4})
+        if not refreshOk then
+            JL:Notify({Title = "Skin Changer", Desc = "Skin was saved, but the dropdown could not refresh: " .. tostring(refreshError), Type = "Warn", Duration = 6})
+        end
+    end
 end
 
 local function resolveSkinAnimationMap(description)
