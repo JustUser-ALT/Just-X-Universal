@@ -932,28 +932,70 @@ local function attachLocalAccessory(character, accessory)
         error("Accessory has no valid Handle")
     end
 
+    -- Only inspect the avatar's actual body parts. Attachments inside other
+    -- accessory Handles must never become attachment targets.
     local bodyAttachments = {}
-    for _, descendant in ipairs(character:GetDescendants()) do
-        if descendant:IsA("Attachment") and descendant.Parent and descendant.Parent:IsA("BasePart") then
-            bodyAttachments[descendant.Name] = descendant
+    for _, bodyPart in ipairs(character:GetChildren()) do
+        if bodyPart:IsA("BasePart") then
+            for _, descendant in ipairs(bodyPart:GetDescendants()) do
+                if descendant:IsA("Attachment") and descendant.Parent:IsA("BasePart") then
+                    local candidates = bodyAttachments[descendant.Name]
+                    if not candidates then
+                        candidates = {}
+                        bodyAttachments[descendant.Name] = candidates
+                    end
+                    table.insert(candidates, descendant)
+                end
+            end
         end
+    end
+
+    local function getPreferredBodyPart(attachmentName)
+        local preferences = {
+            BodyFrontAttachment = {"UpperTorso"},
+            BodyBackAttachment = {"UpperTorso"},
+            WaistFrontAttachment = {"LowerTorso"},
+            WaistBackAttachment = {"LowerTorso"},
+            WaistCenterAttachment = {"LowerTorso"},
+            HatAttachment = {"Head"},
+            HairAttachment = {"Head"},
+            FaceCenterAttachment = {"Head"},
+            FaceFrontAttachment = {"Head"},
+            RightGripAttachment = {"RightHand"},
+            LeftGripAttachment = {"LeftHand"}
+        }
+        return preferences[attachmentName] or {}
     end
 
     local accessoryAttachment
     local bodyAttachment
+    local bestScore = -math.huge
+
     for _, descendant in ipairs(handle:GetDescendants()) do
         if descendant:IsA("Attachment") then
-            local matching = bodyAttachments[descendant.Name]
-            if matching then
-                accessoryAttachment = descendant
-                bodyAttachment = matching
-                break
+            local candidates = bodyAttachments[descendant.Name]
+            if candidates then
+                local preferredParts = getPreferredBodyPart(descendant.Name)
+                for _, candidate in ipairs(candidates) do
+                    local score = 0
+                    for index, partName in ipairs(preferredParts) do
+                        if candidate.Parent.Name == partName then
+                            score = 100 - index
+                            break
+                        end
+                    end
+                    if score > bestScore then
+                        bestScore = score
+                        accessoryAttachment = descendant
+                        bodyAttachment = candidate
+                    end
+                end
             end
         end
     end
 
     if not accessoryAttachment or not bodyAttachment then
-        error("No matching body attachment found for " .. accessory.Name)
+        error("No matching avatar body attachment found for " .. accessory.Name)
     end
 
     accessory.Parent = character
@@ -981,6 +1023,7 @@ end
 local function addLocalAsset(character, humanoid, assetId, className, isLayered)
     assetId = tonumber(assetId)
     if not assetId or assetId <= 0 then return false end
+
     local objects = getLoadedAsset(assetId)
     local source = findAssetClass(objects, className)
     if not source then
@@ -991,37 +1034,53 @@ local function addLocalAsset(character, humanoid, assetId, className, isLayered)
     local clone = source:Clone()
     local okAdd, addError = true, nil
     local warning
-    if clone:IsA("Accessory") then
-        if isLayered then
-            local handle = clone:FindFirstChild("Handle")
-            local wrapLayer = handle and handle:FindFirstChildWhichIsA("WrapLayer", true)
-            local hasWrapTarget = false
-            for _, descendant in ipairs(character:GetDescendants()) do
-                if descendant:IsA("WrapTarget") then
-                    hasWrapTarget = true
-                    break
-                end
-            end
 
-            if wrapLayer and hasWrapTarget then
+    if clone:IsA("Accessory") then
+        local handle = clone:FindFirstChild("Handle")
+        local wrapLayer = handle and handle:FindFirstChildWhichIsA("WrapLayer", true)
+        local wrapEnabled = false
+        if wrapLayer then
+            local okEnabled, enabled = pcall(function()
+                return wrapLayer.Enabled
+            end)
+            wrapEnabled = okEnabled and enabled == true
+        end
+
+        local hasWrapTarget = false
+        for _, descendant in ipairs(character:GetDescendants()) do
+            if descendant:IsA("WrapTarget") then
+                hasWrapTarget = true
+                break
+            end
+        end
+
+        -- The actual asset structure takes priority over AccessoryType and
+        -- HumanoidDescription metadata. A disabled WrapLayer is explicitly
+        -- treated as absent by Roblox, so the accessory uses its Attachment.
+        if wrapLayer and wrapEnabled then
+            if not hasWrapTarget then
+                okAdd = false
+                addError = "Enabled WrapLayer found, but the character has no WrapTarget"
+            else
                 okAdd, addError = pcall(function()
                     humanoid:AddAccessory(clone)
                 end)
                 if not okAdd then
-                    warning = "Layered clothing API failed; using basic attachment fallback: " .. tostring(addError)
-                    okAdd, addError = pcall(attachLocalAccessory, character, clone)
+                    addError = "Layered accessory could not be attached: " .. tostring(addError)
                 end
-            else
-                warning = not wrapLayer
-                    and "WrapLayer is missing; using basic attachment fallback"
-                    or "Character has no WrapTarget; using basic attachment fallback"
-                okAdd, addError = pcall(attachLocalAccessory, character, clone)
             end
         else
+            if isLayered then
+                warning = wrapLayer
+                    and "Layer metadata says layered, but WrapLayer is disabled; using its real Attachment"
+                    or "Layer metadata says layered, but no WrapLayer exists; checking its real Attachment"
+            end
             okAdd, addError = pcall(attachLocalAccessory, character, clone)
         end
     else
-        okAdd, addError = pcall(function() clone.Parent = character end)
+        okAdd, addError = pcall(function()
+            clone.Parent = character
+        end)
     end
 
     for _, object in ipairs(objects) do pcall(function() object:Destroy() end) end
@@ -1031,6 +1090,7 @@ local function addLocalAsset(character, humanoid, assetId, className, isLayered)
     end
     return true, warning
 end
+
 local function applyLocalSkinData(data)
     if type(data) ~= "table" or type(data.Properties) ~= "table" then
         error("Saved skin data is invalid")
