@@ -204,8 +204,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             Bones = 0, Motor6D = 0, Welds = 0, Constraints = 0,
             Attachments = 0, Other = 0,
             RootName = root and root.Name or "none",
-            RootSize = root and root.Size or Vector3.zero,
-            BoundsSize = Vector3.zero, MaxPartSize = Vector3.zero,
+            RootSize = root and {root.Size.X, root.Size.Y, root.Size.Z} or {0, 0, 0},
+            BoundsSize = {0, 0, 0}, MaxPartSize = {0, 0, 0},
             MaxRootOffset = 0
         }
         local maxSize = Vector3.zero
@@ -235,17 +235,26 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 stats.Other += 1
             end
         end
-        stats.MaxPartSize = maxSize
+        stats.MaxPartSize = {maxSize.X, maxSize.Y, maxSize.Z}
         local okBounds, boundsCFrame, boundsSize = pcall(function() return model:GetBoundingBox() end)
-        if okBounds and boundsCFrame and boundsSize then stats.BoundsSize = boundsSize end
+        if okBounds and boundsCFrame and boundsSize then
+            stats.BoundsSize = {boundsSize.X, boundsSize.Y, boundsSize.Z}
+        end
         return stats
     end
 
     local function formatModelComparison(source, restored)
         if type(source) ~= "table" then return "Source stats missing. Re-import with DIAG-03." end
         if type(restored) ~= "table" then return "Restored stats unavailable." end
-        local function v3(value) return string.format("%.1f / %.1f / %.1f", value.X, value.Y, value.Z) end
-        local function delta(a, b) return string.format("%.1f / %.1f / %.1f", b.X-a.X, b.Y-a.Y, b.Z-a.Z) end
+        local function v3(value)
+            return string.format("%.1f / %.1f / %.1f", tonumber(value[1]) or 0, tonumber(value[2]) or 0, tonumber(value[3]) or 0)
+        end
+        local function delta(a, b)
+            return string.format("%.1f / %.1f / %.1f",
+                (tonumber(b[1]) or 0) - (tonumber(a[1]) or 0),
+                (tonumber(b[2]) or 0) - (tonumber(a[2]) or 0),
+                (tonumber(b[3]) or 0) - (tonumber(a[3]) or 0))
+        end
         return string.format(
             "SOURCE -> RESTORED\nParts: %d -> %d | MeshPart: %d -> %d\nSpecialMesh: %d -> %d | Union: %d -> %d\nBone: %d -> %d | Motor6D: %d -> %d\nWeld: %d -> %d | Constraint: %d -> %d\nRoot: %s -> %s\nRoot size: %s -> %s\nBounds: %s -> %s\nBounds delta: %s\nMax part: %s -> %s\nMax root offset: %.1f -> %.1f",
             source.Parts or 0, restored.Parts or 0,
@@ -1834,8 +1843,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         "SOURCE MODEL CAPTURED\nParts: %d | MeshPart: %d | SpecialMesh: %d | Union: %d\nBone: %d | Motor6D: %d | Weld: %d | Constraint: %d\nRoot: %s | Root size: %.1f / %.1f / %.1f\nBounds: %.1f / %.1f / %.1f | Max root offset: %.1f",
                         stats.Parts, stats.MeshParts, stats.SpecialMeshes, stats.Unions,
                         stats.Bones, stats.Motor6D, stats.Welds, stats.Constraints,
-                        stats.RootName, stats.RootSize.X, stats.RootSize.Y, stats.RootSize.Z,
-                        stats.BoundsSize.X, stats.BoundsSize.Y, stats.BoundsSize.Z, stats.MaxRootOffset
+                        stats.RootName, stats.RootSize[1], stats.RootSize[2], stats.RootSize[3],
+                        stats.BoundsSize[1], stats.BoundsSize[2], stats.BoundsSize[3], stats.MaxRootOffset
                     )
                     refreshDiagnostic(true)
                 end
