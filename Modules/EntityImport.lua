@@ -26,6 +26,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local connections = {}
     local hiddenParts = {}
     local hiddenDecals = {}
+    local entityDecalTransparency = setmetatable({}, {__mode = "k"})
     local entityPathInput
     local entityNameInput
     local entityDropdown
@@ -593,7 +594,20 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             if object:IsA("BasePart") then
                 object.LocalTransparencyModifier = hidden and 1 or 0
             elseif object:IsA("Decal") or object:IsA("Texture") then
-                pcall(function() object.LocalTransparencyModifier = hidden and 1 or 0 end)
+                local okLocalTransparency = pcall(function()
+                    object.LocalTransparencyModifier = hidden and 1 or 0
+                end)
+                if not okLocalTransparency then
+                    if hidden then
+                        if entityDecalTransparency[object] == nil then
+                            entityDecalTransparency[object] = object.Transparency
+                        end
+                        object.Transparency = 1
+                    elseif entityDecalTransparency[object] ~= nil then
+                        object.Transparency = entityDecalTransparency[object]
+                        entityDecalTransparency[object] = nil
+                    end
+                end
             end
         end
     end
