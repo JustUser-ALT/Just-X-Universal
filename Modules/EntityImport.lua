@@ -215,6 +215,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             Center = (used.Min + used.Max) / 2
         }
     end
+
     local function classifyAnimation(name, group)
         local n = tostring(name or ""):lower():gsub("[^%w]", "")
         local g = tostring(group or ""):lower():gsub("[^%w]", "")
