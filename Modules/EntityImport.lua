@@ -1469,8 +1469,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local facing = CFrame.Angles(0, yaw, 0)
             local floorY = getFloorY(currentRoot)
             local horizontal = facing:VectorToWorldSpace(Vector3.new(runtime.Bounds.Center.X, 0, runtime.Bounds.Center.Z))
+            -- Keep the same measured standing baseline while following jumps/falls.
             local verticalOffset = currentRoot.Position.Y
-                - floorY - getPlayerFloorOffset(humanoid, currentRoot)
+                - floorY - characterFloorOffset
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
                 floorY - runtime.Bounds.Min.Y + verticalOffset,
