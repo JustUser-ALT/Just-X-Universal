@@ -709,10 +709,16 @@ return function(SkinSection, JL, clearSkinPreview)
             return false
         end
 
+        local entityParts = {}
+        for _, object in ipairs(model:GetDescendants()) do
+            if object:IsA("BasePart") then entityParts[#entityParts + 1] = object end
+        end
+
         local runtime = {
             Model = model,
             BodyRotation = bodyRotation,
             Bounds = bounds,
+            Parts = entityParts,
             Root = root,
             Character = character,
             Humanoid = humanoid,
@@ -782,18 +788,15 @@ return function(SkinSection, JL, clearSkinPreview)
             local look = currentRoot.CFrame.LookVector
             local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
             local facing = CFrame.Angles(0, yaw, 0)
-            local bounds = computeBounds(model, root, getBodyRotation(root.CFrame))
-            if bounds then
-                local floorBelow = getPlayerFloorOffset(humanoid, currentRoot)
-                local offsetY = -floorBelow - bounds.Min.Y
-                local horizontal = facing:VectorToWorldSpace(Vector3.new(bounds.Center.X, 0, bounds.Center.Z))
-                local position = Vector3.new(
-                    currentRoot.Position.X - horizontal.X,
-                    currentRoot.Position.Y + offsetY,
-                    currentRoot.Position.Z - horizontal.Z
-                )
-                root.CFrame = CFrame.new(position) * facing * getBodyRotation(root.CFrame)
-            end
+            local floorBelow = getPlayerFloorOffset(humanoid, currentRoot)
+            local offsetY = -floorBelow - runtime.Bounds.Min.Y
+            local horizontal = facing:VectorToWorldSpace(Vector3.new(runtime.Bounds.Center.X, 0, runtime.Bounds.Center.Z))
+            local position = Vector3.new(
+                currentRoot.Position.X - horizontal.X,
+                currentRoot.Position.Y + offsetY,
+                currentRoot.Position.Z - horizontal.Z
+            )
+            root.CFrame = CFrame.new(position) * facing * runtime.BodyRotation
 
             local cameraHidden = isFirstPerson(character)
             if cameraHidden ~= visibleInFirstPerson then
@@ -833,8 +836,8 @@ return function(SkinSection, JL, clearSkinPreview)
         connections.Render = RunService.RenderStepped:Connect(update)
         connections.PreSimulation = RunService.PreSimulation:Connect(function()
             if active ~= runtime then return end
-            for _, object in ipairs(model:GetDescendants()) do
-                if object:IsA("BasePart") then disablePart(object) end
+            for _, part in ipairs(runtime.Parts) do
+                if part and part.Parent then disablePart(part) end
             end
         end)
 
