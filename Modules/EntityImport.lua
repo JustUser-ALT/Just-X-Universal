@@ -15,6 +15,19 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
     local VISUAL_LIFT = 15
+    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-01"
+    local diagnosticLabel
+    local diagnostic = {
+        State = "Waiting for entity",
+        BeforeY = nil,
+        TargetY = nil,
+        ActualY = nil,
+        PreviousY = nil,
+        OverwriteDelta = nil,
+        PivotY = nil,
+        ModelParent = "none"
+    }
+    local lastDiagnosticUpdate = 0
     local entries = {}
     local selectedEntry
     local active
@@ -37,6 +50,30 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 })
             end)
         end
+    end
+
+    local function refreshDiagnostic(force)
+        if not diagnosticLabel then return end
+        local now = os.clock()
+        if not force and now - lastDiagnosticUpdate < 0.35 then return end
+        lastDiagnosticUpdate = now
+
+        local function fmt(value)
+            return value == nil and "-" or string.format("%.2f", value)
+        end
+
+        diagnosticLabel:Set(string.format(
+            "Build: %s | Lift: %.1f\nState: %s\nModel: %s\nBefore PivotTo Y: %s\nTarget Root Y: %s\nActual Root Y: %s\nPrevious-frame overwrite: %s\nModel Pivot Y: %s",
+            DIAGNOSTIC_BUILD,
+            VISUAL_LIFT,
+            tostring(diagnostic.State),
+            tostring(diagnostic.ModelParent),
+            fmt(diagnostic.BeforeY),
+            fmt(diagnostic.TargetY),
+            fmt(diagnostic.ActualY),
+            fmt(diagnostic.OverwriteDelta),
+            fmt(diagnostic.PivotY)
+        ))
     end
 
     local function trim(value)
@@ -1373,6 +1410,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local currentRoot = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
             if not currentRoot then return end
 
+            local beforeY = root.Position.Y
+            local previousY = diagnostic.ActualY
             local look = currentRoot.CFrame.LookVector
             local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
             local facing = CFrame.Angles(0, yaw, 0)
@@ -1388,6 +1427,16 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             )
             local targetRootCFrame = CFrame.new(position) * facing * bodyRotation
             model:PivotTo(targetRootCFrame * rootToPivot)
+
+            diagnostic.State = "Initial PivotTo executed"
+            diagnostic.BeforeY = beforeY
+            diagnostic.TargetY = position.Y
+            diagnostic.ActualY = root.Position.Y
+            diagnostic.PreviousY = previousY
+            diagnostic.OverwriteDelta = previousY and (beforeY - previousY) or nil
+            diagnostic.PivotY = model:GetPivot().Position.Y
+            diagnostic.ModelParent = model.Parent and model.Parent:GetFullName() or "unparented"
+            refreshDiagnostic(true)
         end
 
         positionEntity()
@@ -1431,6 +1480,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local currentRoot = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
             if not currentRoot then return end
 
+            local beforeY = root.Position.Y
+            local previousY = diagnostic.ActualY
             local look = currentRoot.CFrame.LookVector
             local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
             local facing = CFrame.Angles(0, yaw, 0)
@@ -1445,6 +1496,16 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             )
             local targetRootCFrame = CFrame.new(position) * facing * runtime.BodyRotation
             model:PivotTo(targetRootCFrame * rootToPivot)
+
+            diagnostic.State = "Preview running"
+            diagnostic.BeforeY = beforeY
+            diagnostic.TargetY = position.Y
+            diagnostic.ActualY = root.Position.Y
+            diagnostic.PreviousY = previousY
+            diagnostic.OverwriteDelta = previousY and (beforeY - previousY) or nil
+            diagnostic.PivotY = model:GetPivot().Position.Y
+            diagnostic.ModelParent = model.Parent and model.Parent:GetFullName() or "unparented"
+            refreshDiagnostic(false)
 
             local cameraHidden = isFirstPerson(character)
             if cameraHidden ~= visibleInFirstPerson then
@@ -1493,6 +1554,10 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local animationNames = {}
         for slot in pairs(slots) do animationNames[#animationNames + 1] = slot end
         table.sort(animationNames)
+
+        diagnostic.State = "Loaded; RenderStepped active"
+        diagnostic.ModelParent = model.Parent and model.Parent:GetFullName() or "unparented"
+        refreshDiagnostic(true)
 
         local summary = string.format(
             "Loaded %s | %d parts | animations: %s",
@@ -1599,7 +1664,14 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
     loadConfig()
 
-    SkinSection:Divider()
+    SkinSection:Divider({Label = "Entity Diagnostics"})
+    diagnosticLabel = SkinSection:Label({
+        Text = "Build: " .. DIAGNOSTIC_BUILD .. " | Lift: " .. tostring(VISUAL_LIFT) .. "\nState: Waiting for entity",
+        Color = Color3.fromRGB(190, 190, 190)
+    })
+    refreshDiagnostic(true)
+
+    SkinSection:Divider({Label = "Entity Import"})
 
     local pathInput = SkinSection:Input({
         Name = "Entity Model Path",
