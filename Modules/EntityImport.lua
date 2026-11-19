@@ -14,12 +14,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local CONFIG_FILE = "JustXUniversal_Entities.json"
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
-    local DEFAULTS = {
-        ScaleMode = "Fit",
-        MovementMode = "Auto",
-        RunThreshold = 0.9
-    }
-
     local entries = {}
     local selectedEntry
     local active
@@ -29,8 +23,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local entityDecalTransparency = setmetatable({}, {__mode = "k"})
     local entityNameInput
     local entityDropdown
-    local scaleMode = DEFAULTS.ScaleMode
-    local movementMode = DEFAULTS.MovementMode
     local busy = false
 
     local function notify(title, desc, kind)
@@ -555,8 +547,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         elseif state == Enum.HumanoidStateType.Freefall then
             wanted = "fall"
         elseif speed > 0.5 then
-            local threshold = math.max(17, humanoid.WalkSpeed * DEFAULTS.RunThreshold)
-            if movementMode == "Auto" and runtime.Slots.run and speed >= threshold then
+            local threshold = math.max(17, humanoid.WalkSpeed * 0.9)
+            if runtime.Slots.run and speed >= threshold then
                 wanted = "run"
             else
                 wanted = "walk"
@@ -694,15 +686,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             end
         end
 
-        local playerHeight = 5
-        pcall(function() playerHeight = character:GetExtentsSize().Y end)
-        local entityHeight = math.max(info.Bounds.Size.Y, 0.01)
-        local scale = scaleMode == "Fit" and math.clamp(playerHeight / entityHeight, 0.05, 100) or 1
-        if math.abs(scale - 1) > 0.0001 then
-            local okScale = pcall(function() model:ScaleTo(model:GetScale() * scale) end)
-            if not okScale then scale = 1 end
-        end
-
         local root = pickRoot(model)
         if not root then
             model:Destroy()
@@ -759,9 +742,26 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             Errors = {},
             Slot = nil,
             IdleVariant = math.random(1, 2),
-            Scale = scale,
             Info = info
         }
+
+        local floorRayParams = RaycastParams.new()
+        floorRayParams.FilterType = Enum.RaycastFilterType.Exclude
+        floorRayParams.FilterDescendantsInstances = {character, model}
+        floorRayParams.IgnoreWater = true
+
+        local function getFloorY(currentRoot)
+            if humanoid.FloorMaterial ~= Enum.Material.Air then
+                local rayLength = math.max(getPlayerFloorOffset(humanoid, currentRoot) + 8, 12)
+                local result = Workspace:Raycast(
+                    currentRoot.Position,
+                    Vector3.new(0, -rayLength, 0),
+                    floorRayParams
+                )
+                if result then return result.Position.Y end
+            end
+            return currentRoot.Position.Y - getPlayerFloorOffset(humanoid, currentRoot)
+        end
 
         local function positionEntity()
             local currentRoot = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
@@ -770,12 +770,11 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local look = currentRoot.CFrame.LookVector
             local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
             local facing = CFrame.Angles(0, yaw, 0)
-            local floorBelow = getPlayerFloorOffset(humanoid, currentRoot)
-            local offsetY = -floorBelow - bounds.Min.Y
+            local floorY = getFloorY(currentRoot)
             local horizontal = facing:VectorToWorldSpace(Vector3.new(bounds.Center.X, 0, bounds.Center.Z))
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
-                currentRoot.Position.Y + offsetY,
+                floorY - bounds.Min.Y,
                 currentRoot.Position.Z - horizontal.Z
             )
             root.CFrame = CFrame.new(position) * facing * bodyRotation
@@ -817,12 +816,11 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local look = currentRoot.CFrame.LookVector
             local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
             local facing = CFrame.Angles(0, yaw, 0)
-            local floorBelow = getPlayerFloorOffset(humanoid, currentRoot)
-            local offsetY = -floorBelow - runtime.Bounds.Min.Y
+            local floorY = getFloorY(currentRoot)
             local horizontal = facing:VectorToWorldSpace(Vector3.new(runtime.Bounds.Center.X, 0, runtime.Bounds.Center.Z))
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
-                currentRoot.Position.Y + offsetY,
+                floorY - runtime.Bounds.Min.Y,
                 currentRoot.Position.Z - horizontal.Z
             )
             root.CFrame = CFrame.new(position) * facing * runtime.BodyRotation
@@ -958,28 +956,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         Name = "Entity Name (Optional)",
         Placeholder = "Leave empty to use model name",
         Flag = "JXU_EntityName"
-    })
-
-    SkinSection:Dropdown({
-        Name = "Entity Scale",
-        Options = {"Auto Fit", "Native"},
-        Search = false,
-        MultiSelect = false,
-        Flag = "JXU_EntityScale",
-        Callback = function(value)
-            scaleMode = value == "Native" and "Native" or "Fit"
-        end
-    })
-
-    SkinSection:Dropdown({
-        Name = "Movement Animations",
-        Options = {"Auto (Walk + Run)", "Walk Only"},
-        Search = false,
-        MultiSelect = false,
-        Flag = "JXU_EntityMovementMode",
-        Callback = function(value)
-            movementMode = value == "Walk Only" and "Walk Only" or "Auto"
-        end
     })
 
     SkinSection:Button({
