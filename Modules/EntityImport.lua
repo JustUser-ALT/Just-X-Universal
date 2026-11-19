@@ -491,7 +491,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             end
         end
         if not slots.idle then slots.idle = slots.idle1 or slots.idle2 end
-        if not slots.idle1 then slots.idle1 = slots.idle end
         return slots
     end
 
