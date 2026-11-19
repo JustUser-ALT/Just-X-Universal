@@ -164,7 +164,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         return CFrame.Angles(0, -yaw, 0) * rootCFrame.Rotation
     end
 
-    local function computeBounds(model, root)
+    local function computeBounds(model, root, bodyRotation)
         local function newBounds()
             return {
                 Min = Vector3.new(math.huge, math.huge, math.huge),
@@ -196,9 +196,14 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     for _, y in ipairs({-1, 1}) do
                         for _, z in ipairs({-1, 1}) do
                             local worldPoint = (part.CFrame * CFrame.new(x * half.X, y * half.Y, z * half.Z)).Position
-                            -- Bounds stay in root-local space. The target root CFrame
-                            -- applies facing/body rotation later during PivotTo.
-                            local point = root.CFrame:PointToObjectSpace(worldPoint)
+                            -- Convert each corner into the exact orientation frame that
+                            -- will be used by targetRootCFrame (facing * bodyRotation).
+                            -- This keeps the floor minimum and visual center correct for
+                            -- tilted/custom monster rigs instead of assuming an upright root.
+                            local rootLocalPoint = root.CFrame:PointToObjectSpace(worldPoint)
+                            local point = bodyRotation
+                                and bodyRotation:VectorToWorldSpace(rootLocalPoint)
+                                or rootLocalPoint
                             addPoint(complete, point)
                             if part.Transparency < 0.98 then
                                 addPoint(visible, point)
@@ -339,51 +344,24 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local isPlayerCharacter, playerName, playerCharacter = isPlayerCharacterSource(source)
         local animationSource = source
         local sourceName = source.Name
-        local generatedAvatarModel
-        local avatarDescriptionData
 
         if isPlayerCharacter then
             if playerName ~= LocalPlayer.Name then
                 return nil, "Importing another player's character is disabled. You can import only your own character."
             end
 
-            -- Use the same HumanoidDescription-based avatar generation as Skin Changer.
-            -- The original character remains the animation source; the generated model
-            -- becomes the portable visual template.
+            -- A custom monster skin can be applied to the local character while its
+            -- real appearance remains in the live character hierarchy. HumanoidDescription
+            -- cannot represent arbitrary meshes, textures, SurfaceAppearance or custom rigs,
+            -- so normalize any selected descendant to the complete live character and clone it.
             animationSource = playerCharacter
             sourceName = playerCharacter.Name
-            local sourceHumanoid = playerCharacter:FindFirstChildOfClass("Humanoid")
-            if not sourceHumanoid then
-                return nil, "Your character has no Humanoid for HumanoidDescription capture."
-            end
-
-            local description
-            local okDescription, descriptionOrError = pcall(function()
-                return sourceHumanoid:GetAppliedDescription()
-            end)
-            if not okDescription or not descriptionOrError then
-                return nil, "Could not read your avatar HumanoidDescription: " .. tostring(descriptionOrError)
-            end
-            description = descriptionOrError
-            avatarDescriptionData = captureAvatarDescription(description, sourceHumanoid.RigType)
-
-            local okGenerate, generatedOrError = pcall(function()
-                return createAvatarDescriptionModel(description, sourceHumanoid.RigType)
-            end)
-            pcall(function() description:Destroy() end)
-            if not okGenerate or not generatedOrError or not generatedOrError:IsA("Model") then
-                return nil, "Could not generate an avatar copy from HumanoidDescription: " .. tostring(generatedOrError)
-            end
-
-            generatedAvatarModel = generatedOrError
-            generatedAvatarModel.Name = sourceName
-            source = generatedAvatarModel
+            source = playerCharacter
         end
 
         local sourceIsPart = source:IsA("BasePart")
         local sourceIsContainer = source:IsA("Folder") or source:IsA("Accessory") or source:IsA("Tool")
         if not source:IsA("Model") and not sourceIsPart and not sourceIsContainer then
-            if generatedAvatarModel then generatedAvatarModel:Destroy() end
             return nil, source:GetFullName() .. " is a " .. source.ClassName .. "; expected a Model, Folder, Accessory, Tool, or BasePart"
         end
 
@@ -400,7 +378,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
         local okClone, clone = pcall(function() return source:Clone() end)
         for _, object in ipairs(unlocked) do pcall(function() object.Archivable = false end) end
-        if generatedAvatarModel then generatedAvatarModel:Destroy() end
         if not okClone or not clone then
             return nil, "Clone() failed: " .. tostring(clone)
         end
@@ -419,7 +396,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             Name = sourceName,
             Animations = {},
             Warnings = {},
-            AvatarDescription = avatarDescriptionData,
             PartCount = 0,
             AccessoryCount = 0
         }
@@ -495,7 +471,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         end
 
         local bodyRotation = getBodyRotation(root.CFrame)
-        local bounds = computeBounds(clone, root)
+        local bounds = computeBounds(clone, root, bodyRotation)
         if not bounds then
             clone:Destroy()
             return nil, "Could not measure the entity bounds"
@@ -1340,7 +1316,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         -- Preserve the selected root's offset from the model pivot. PivotTo moves
         -- the complete entity even when its PrimaryPart is far from its visual center.
         local rootToPivot = root.CFrame:ToObjectSpace(model:GetPivot())
-        local bounds = computeBounds(model, root)
+        local bounds = computeBounds(model, root, bodyRotation)
         if not bounds then
             model:Destroy()
             notify("Entity Import", "Could not measure the cloned model.", "Error")
