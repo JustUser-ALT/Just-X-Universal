@@ -66,7 +66,7 @@ diff --git a/Modules/EntityImport.lua b/Modules/EntityImport.lua
 new file mode 100644
 --- /dev/null
 +++ b/Modules/EntityImport.lua
-@@ -0,0 +1,1108 @@
+@@ -0,0 +1,1109 @@
 +-- Just X Universal - Entity Import
 +-- Imports arbitrary in-game Models/BaseParts into the existing Skin Changer section.
 +-- Local visual replacement only; it does not modify the server character.
@@ -74,6 +74,7 @@ new file mode 100644
 +return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 +    if not SkinSection then error("Entity Import requires the existing Skin Changer section") end
 +
++    local Players = game:GetService("Players")
 +    local RunService = game:GetService("RunService")
 +    local HttpService = game:GetService("HttpService")
 +    local Workspace = game:GetService("Workspace")
