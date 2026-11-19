@@ -631,6 +631,11 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     end)
                     if not meshOk and props.MeshId and props.MeshId ~= "" then
                         fallbackMeshes[index] = true
+                        local mesh = Instance.new("SpecialMesh")
+                        mesh.MeshType = Enum.MeshType.FileMesh
+                        mesh.MeshId = props.MeshId
+                        mesh.TextureId = props.TextureID or ""
+                        mesh.Parent = object
                     end
                 elseif fallbackMeshes[index] and props.MeshId and props.MeshId ~= "" then
                     local mesh = Instance.new("SpecialMesh")
