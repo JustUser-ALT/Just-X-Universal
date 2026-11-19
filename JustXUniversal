@@ -35,7 +35,7 @@ local Main = Window:Tab({
 -- AVATAR MODULE
 --==================================================
 
-local AVATAR_MODULE_URL = "https://raw.githubusercontent.com/JustUser-ALT/Just-X-Universal/main/Modules/Avatar.lua?v=57c7dfed"
+local AVATAR_MODULE_URL = "https://raw.githubusercontent.com/JustUser-ALT/Just-X-Universal/main/Modules/Avatar.lua?v=6ad52150"
 local avatarModuleOk, AvatarModule = pcall(function()
     local source = game:HttpGet(AVATAR_MODULE_URL)
     local chunk = loadstring(source)
