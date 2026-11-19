@@ -717,7 +717,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local bounds = computeBounds(model, root, bodyRotation)
         if not bounds then
             model:Destroy()
-            notify("Entity Import", "Could not measure the cloned model after scaling.", "Error")
+            notify("Entity Import", "Could not measure the cloned model.", "Error")
             return false
         end
 
