@@ -1120,7 +1120,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             object.Name = tostring(node.Name or className)
             objects[index] = object
             local parentIndex = tonumber(node.Parent)
-            if parentIndex and objects[parentIndex] then
+            -- SurfaceAppearance cannot be parented to the temporary Part used for MeshPart placeholders.
+            -- Defer its parenting until the placeholder has been replaced by the restored MeshPart.
+            if parentIndex and objects[parentIndex] and className ~= "SurfaceAppearance" then
                 object.Parent = objects[parentIndex]
             end
         end
@@ -1394,6 +1396,19 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 for _, child in ipairs(placeholder:GetChildren()) do child.Parent = meshPart end
                 objects[index] = meshPart
                 placeholder:Destroy()
+            end
+        end
+
+        -- Parent deferred SurfaceAppearance instances only after their MeshPart parents exist.
+        for index, node in ipairs(data.Nodes) do
+            if node.Class == "SurfaceAppearance" then
+                local parentIndex = tonumber(node.Parent)
+                local parent = parentIndex and objects[parentIndex]
+                if parent and parent:IsA("MeshPart") then
+                    objects[index].Parent = parent
+                else
+                    error("SurfaceAppearance parent is not a restored MeshPart for " .. tostring(node.Name))
+                end
             end
         end
 
