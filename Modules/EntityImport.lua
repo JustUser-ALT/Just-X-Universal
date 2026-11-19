@@ -15,7 +15,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
     local VISUAL_LIFT = 15
-    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-03"
+    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-04"
     local diagnosticLabel
     local diagnostic = {
         State = "Waiting for entity",
@@ -26,7 +26,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         OverwriteDelta = nil,
         PivotY = nil,
         ModelParent = "none",
-        Compare = "No portable restore comparison yet"
+        Compare = "No portable restore comparison yet",
+        MeshCompare = "No mesh restore comparison yet"
     }
     local lastDiagnosticUpdate = 0
     local entries = {}
@@ -74,7 +75,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             fmt(diagnostic.ActualY),
             fmt(diagnostic.OverwriteDelta),
             fmt(diagnostic.PivotY),
-            tostring(diagnostic.Compare)
+            tostring(diagnostic.Compare) .. "\n\nMESH RESTORE CHECK\n" .. tostring(diagnostic.MeshCompare)
         ))
     end
 
@@ -703,6 +704,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local nodes = {}
         local indices = {}
         local unsupported = {}
+        local sourceMeshes = {}
         local rootFrame = root.CFrame
 
         local function visit(object, parentIndex)
@@ -736,11 +738,16 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     props.BottomSurface = enumName(object.BottomSurface)
                     if object:IsA("Part") then props.Shape = enumName(object.Shape) end
                     if object:IsA("MeshPart") then
+                        local meshRecord = {Index = #sourceMeshes + 1, Name = object:GetFullName(), Class = object.ClassName}
                         pcall(function() props.MeshId = object.MeshId end)
                         pcall(function() props.TextureID = object.TextureID end)
                         pcall(function() props.RenderFidelity = enumName(object.RenderFidelity) end)
                         pcall(function() props.CollisionFidelity = enumName(object.CollisionFidelity) end)
                         pcall(function() props.DoubleSided = object.DoubleSided end)
+                        meshRecord.MeshId = props.MeshId or ""
+                        meshRecord.TextureID = props.TextureID or ""
+                        meshRecord.Size = props.Size
+                        sourceMeshes[#sourceMeshes + 1] = meshRecord
                     elseif object:IsA("UnionOperation") then
                         unsupported.UnionOperation = true
                     end
@@ -851,6 +858,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             Nodes = nodes,
             Animations = animations or {},
             SourceStats = measureModel(model),
+            SourceMeshes = sourceMeshes,
             Unsupported = warningNames
         }, warningNames
     end
@@ -862,6 +870,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
         local objects = {}
         local fallbackMeshes = {}
+        local meshRestoreRecords = {}
 
         for index, node in ipairs(data.Nodes) do
             local className = tostring(node.Class or "")
@@ -961,17 +970,29 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 pcall(function() object.CFrame = relative end)
 
                 if object:IsA("MeshPart") then
-                    local meshOk = pcall(function()
+                    local meshOk, meshError = pcall(function()
                         object.MeshId = props.MeshId or ""
                         object.TextureID = props.TextureID or ""
                     end)
+                    local meshRecord = {
+                        Name = object.Name,
+                        SourceMeshId = tostring(props.MeshId or ""),
+                        RestoredMeshId = "",
+                        Assignment = meshOk and "MeshId assigned" or ("MeshId assignment failed: " .. tostring(meshError)),
+                        Fallback = false,
+                        SavedSize = vectorFrom(props.Size),
+                        RestoredSize = object.Size
+                    }
                     if not meshOk and props.MeshId and props.MeshId ~= "" then
                         fallbackMeshes[index] = true
                         local mesh = Instance.new("SpecialMesh")
                         mesh.MeshType = Enum.MeshType.FileMesh
                         mesh.MeshId = props.MeshId
                         mesh.TextureId = props.TextureID or ""
+                        mesh.Scale = vectorFrom(props.Size)
                         mesh.Parent = object
+                        meshRecord.Fallback = true
+                        meshRecord.Assignment = "SpecialMesh fallback"
                     end
                     setEnum(object, "RenderFidelity", Enum.RenderFidelity, props.RenderFidelity)
                     setEnum(object, "CollisionFidelity", Enum.CollisionFidelity, props.CollisionFidelity)
@@ -980,12 +1001,27 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     -- size and local transform only after the mesh asset is restored.
                     pcall(function() object.Size = vectorFrom(props.Size) end)
                     pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
+                    pcall(function() meshRecord.RestoredMeshId = object.MeshId end)
+                    meshRecord.RestoredSize = object.Size
+                    meshRestoreRecords[#meshRestoreRecords + 1] = meshRecord
                 elseif fallbackMeshes[index] and props.MeshId and props.MeshId ~= "" then
                     local mesh = Instance.new("SpecialMesh")
                     mesh.MeshType = Enum.MeshType.FileMesh
                     mesh.MeshId = props.MeshId
                     mesh.TextureId = props.TextureID or ""
+                    mesh.Scale = vectorFrom(props.Size)
                     mesh.Parent = object
+                    meshRestoreRecords[#meshRestoreRecords + 1] = {
+                        Name = object.Name,
+                        SourceMeshId = tostring(props.MeshId or ""),
+                        RestoredMeshId = tostring(mesh.MeshId or ""),
+                        Assignment = "Part + SpecialMesh fallback",
+                        Fallback = true,
+                        SavedSize = vectorFrom(props.Size),
+                        RestoredSize = object.Size,
+                        SpecialMeshScale = mesh.Scale,
+                        SpecialMeshOffset = mesh.Offset
+                    }
                 end
             elseif object:IsA("Bone") then
                 pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
@@ -1099,7 +1135,30 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         if primary and primary:IsA("BasePart") then
             pcall(function() model.PrimaryPart = primary end)
         end
-        return model
+        return model, nil, meshRestoreRecords
+    end
+
+    local function formatMeshRestoreReport(records)
+        if type(records) ~= "table" or #records == 0 then return "No MeshPart entries recorded" end
+        local lines = {}
+        local function v3(value)
+            if typeof(value) ~= "Vector3" then return "n/a" end
+            return string.format("%.2f/%.2f/%.2f", value.X, value.Y, value.Z)
+        end
+        for index, item in ipairs(records) do
+            if index > 15 then
+                lines[#lines + 1] = string.format("... +%d more", #records - 15)
+                break
+            end
+            lines[#lines + 1] = string.format(
+                "%02d %s | %s | ID:%s | Size:%s>%s%s",
+                index, tostring(item.Name), tostring(item.Assignment),
+                item.SourceMeshId == item.RestoredMeshId and "MATCH" or "DIFF",
+                v3(item.SavedSize), v3(item.RestoredSize),
+                item.Fallback and (" | Scale:" .. v3(item.SpecialMeshScale) .. " Offset:" .. v3(item.SpecialMeshOffset)) or ""
+            )
+        end
+        return table.concat(lines, "\n")
     end
 
     local function disablePart(part)
@@ -1396,12 +1455,13 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         AccessoryCount = 0
                     }
                 else
-                    local restoredModel, restoreError = deserializeModel(entry.Data)
+                    local restoredModel, restoreError, meshRestoreRecords = deserializeModel(entry.Data)
                     if not restoredModel then
                         notify("Entity Import", restoreError, "Error")
                         return false
                     end
                     diagnostic.Compare = formatModelComparison(entry.Data.SourceStats, measureModel(restoredModel))
+                    diagnostic.MeshCompare = formatMeshRestoreReport(meshRestoreRecords)
                     diagnostic.State = "Portable model reconstructed; comparing source"
                     refreshDiagnostic(true)
                     info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
