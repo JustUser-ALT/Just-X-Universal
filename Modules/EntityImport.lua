@@ -73,7 +73,8 @@ return function(SkinSection, JL, clearSkinPreview)
 
         path = path:gsub("/", ".")
         path = path:gsub("game:GetService%(%s*['\"]([^'\"]+)['\"]%s*%)", "%1")
-        path = path:gsub(":(WaitForChild|FindFirstChild)%(%s*['\"]([^'\"]+)['\"]%s*%)", ".%2")
+        path = path:gsub(":WaitForChild%(%s*['\"]([^'\"]+)['\"]%s*%)", ".%1")
+        path = path:gsub(":FindFirstChild%(%s*['\"]([^'\"]+)['\"]%s*%)", ".%1")
         path = path:gsub("%[%s*['\"]([^'\"]+)['\"]%s*%]", ".%1")
         path = path:gsub("^%.+", ""):gsub("%.+$", "")
 
@@ -238,7 +239,7 @@ return function(SkinSection, JL, clearSkinPreview)
             Id = normalized,
             Name = tostring(name or "Animation"),
             Group = tostring(group or ""),
-            Priority = priority and tostring(priority) or nil
+            Priority = priority and tostring(priority):match("([^%.]+)$") or nil
         }
     end
 
@@ -411,7 +412,9 @@ return function(SkinSection, JL, clearSkinPreview)
         for _, object in ipairs(model:GetDescendants()) do
             if object:IsA("JointInstance") or object:IsA("WeldConstraint") then
                 local p0, p1 = object.Part0, object.Part1
-                if object.Enabled ~= false and p0 and p1 and parent[p0] and parent[p1] then
+                local enabled = true
+                pcall(function() enabled = object.Enabled end)
+                if enabled and p0 and p1 and parent[p0] and parent[p1] then
                     union(p0, p1)
                 end
             end
@@ -618,7 +621,7 @@ return function(SkinSection, JL, clearSkinPreview)
         end
 
         local info = entry.Info
-        if not info or not info.Template or not info.Template.Parent and not info.Template:IsA("Model") then
+        if not info or not info.Template or not info.Template:IsA("Model") then
             local captureError
             info, captureError = captureEntity(entry.Path)
             if not info then
@@ -698,8 +701,18 @@ return function(SkinSection, JL, clearSkinPreview)
         end
 
         local slots = buildSlots(info.Animations)
+        local bodyRotation = getBodyRotation(root.CFrame)
+        local bounds = computeBounds(model, root, bodyRotation)
+        if not bounds then
+            model:Destroy()
+            notify("Entity Import", "Could not measure the cloned model after scaling.", "Error")
+            return false
+        end
+
         local runtime = {
             Model = model,
+            BodyRotation = bodyRotation,
+            Bounds = bounds,
             Root = root,
             Character = character,
             Humanoid = humanoid,
@@ -722,9 +735,6 @@ return function(SkinSection, JL, clearSkinPreview)
             local look = currentRoot.CFrame.LookVector
             local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
             local facing = CFrame.Angles(0, yaw, 0)
-            local bounds = computeBounds(model, root, getBodyRotation(root.CFrame))
-            if not bounds then return end
-
             local floorBelow = getPlayerFloorOffset(humanoid, currentRoot)
             local offsetY = -floorBelow - bounds.Min.Y
             local horizontal = facing:VectorToWorldSpace(Vector3.new(bounds.Center.X, 0, bounds.Center.Z))
@@ -733,7 +743,6 @@ return function(SkinSection, JL, clearSkinPreview)
                 currentRoot.Position.Y + offsetY,
                 currentRoot.Position.Z - horizontal.Z
             )
-            local bodyRotation = getBodyRotation(root.CFrame)
             root.CFrame = CFrame.new(position) * facing * bodyRotation
         end
 
@@ -754,6 +763,7 @@ return function(SkinSection, JL, clearSkinPreview)
             hideCharacterObject(object, character)
         end)
 
+        local visibleInFirstPerson = false
         local function update()
             if active ~= runtime then return end
             if LocalPlayer.Character ~= character or not character.Parent then
@@ -786,19 +796,24 @@ return function(SkinSection, JL, clearSkinPreview)
             end
 
             local cameraHidden = isFirstPerson(character)
-            setEntityVisibility(model, cameraHidden)
+            if cameraHidden ~= visibleInFirstPerson then
+                visibleInFirstPerson = cameraHidden
+                setEntityVisibility(model, cameraHidden)
+            end
 
             local velocity = currentRoot.AssemblyLinearVelocity
             local speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
             local state = humanoid:GetState()
             local wanted = chooseSlot(runtime, humanoid, speed, state)
+            if wanted == "idle" and slots.idle1 and slots.idle2 then
+                wanted = runtime.IdleVariant == 1 and "idle1" or "idle2"
+            end
             if wanted ~= runtime.Slot then
                 local old = runtime.Slot and runtime.Tracks[runtime.Slot]
                 if old then pcall(function() old:Stop(0.15) end) end
 
-                if wanted == "idle" and slots.idle1 and slots.idle2 then
-                    runtime.IdleVariant = runtime.IdleVariant == 1 and 2 or 1
-                    wanted = runtime.IdleVariant == 1 and "idle1" or "idle2"
+                if wanted == "idle1" or wanted == "idle2" then
+                    runtime.IdleVariant = wanted == "idle1" and 2 or 1
                 end
 
                 local track = wanted and loadEntityTrack(runtime, wanted)
