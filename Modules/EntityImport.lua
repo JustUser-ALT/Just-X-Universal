@@ -17,7 +17,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local VISUAL_LIFT = 15
     local DISABLE_ENTITY_ANIMATIONS = true -- Temporary diagnostic: test restored rig without imported animation tracks
     local RESET_SKELETON_TRANSFORMS = true -- Temporary diagnostic: restore neutral Bone/Motor6D pose
-    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-07"
+    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-08"
     local diagnosticLabel
     local diagnostic = {
         State = "Waiting for entity",
@@ -30,7 +30,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         ModelParent = "none",
         Compare = "No portable restore comparison yet",
         MeshCompare = "No mesh restore comparison yet",
-        SkeletonCompare = "No skeleton restore comparison yet"
+        SkeletonCompare = "No skeleton restore comparison yet",
+        GeometryCompare = "No geometry restore comparison yet"
     }
     local lastDiagnosticUpdate = 0
     local entries = {}
@@ -106,6 +107,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             "",
             "SKELETON RESTORE CHECK",
             tostring(diagnostic.SkeletonCompare),
+            "",
+            "PART / HIERARCHY / SURFACE CHECK",
+            tostring(diagnostic.GeometryCompare),
             "========== END " .. DIAGNOSTIC_BUILD .. " =========="
         }
         local output = "[ENTITY-DIAG] " .. table.concat(lines, "\n[ENTITY-DIAG] ")
@@ -1196,7 +1200,78 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         if primary and primary:IsA("BasePart") then
             pcall(function() model.PrimaryPart = primary end)
         end
-        return model, nil, meshRestoreRecords, skeletonRestoreRecords
+
+        local geometryLines = {}
+        local partCount, boneCount, parentMismatches = 0, 0, 0
+        local maxPositionDelta, maxAngleDelta = 0, 0
+        local largestParts = {}
+        local hierarchyIssues = {}
+        local surfaceLines = {}
+        for index, node in ipairs(data.Nodes) do
+            local object = objects[index]
+            local props = node.Props or {}
+            if object and object:IsA("BasePart") then
+                partCount += 1
+                local expected = cframeFrom(props.CFrame)
+                local delta = expected:ToObjectSpace(object.CFrame)
+                local _, angle = delta:ToAxisAngle()
+                local positionDelta = delta.Position.Magnitude
+                local angleDelta = math.deg(angle)
+                maxPositionDelta = math.max(maxPositionDelta, positionDelta)
+                maxAngleDelta = math.max(maxAngleDelta, angleDelta)
+                if positionDelta > 0.001 or angleDelta > 0.01 then
+                    largestParts[#largestParts + 1] = {
+                        Name = object.Name, Position = positionDelta, Angle = angleDelta
+                    }
+                end
+            elseif object and object:IsA("Bone") then
+                boneCount += 1
+                local expectedParent = objects[tonumber(node.Parent)]
+                if expectedParent and object.Parent ~= expectedParent then
+                    parentMismatches += 1
+                    hierarchyIssues[#hierarchyIssues + 1] = object.Name .. " expected " .. expectedParent.Name
+                        .. " got " .. (object.Parent and object.Parent.Name or "nil")
+                end
+            elseif object and object:IsA("SurfaceAppearance") then
+                local maps = {}
+                for _, property in ipairs({"ColorMap", "MetalnessMap", "NormalMap", "RoughnessMap"}) do
+                    local ok, value = pcall(function() return object[property] end)
+                    if ok and value and value ~= "" then maps[#maps + 1] = property .. "=" .. tostring(value) end
+                end
+                surfaceLines[#surfaceLines + 1] = object.Name .. " | " .. (#maps > 0 and table.concat(maps, " ; ") or "NO MAP IDS")
+            end
+        end
+        table.sort(largestParts, function(a, b)
+            return math.max(a.Position, a.Angle) > math.max(b.Position, b.Angle)
+        end)
+        geometryLines[#geometryLines + 1] = string.format(
+            "PART CFRAME: %d | MAX POSITION DELTA: %.5f | MAX ANGLE DELTA: %.4f deg",
+            partCount, maxPositionDelta, maxAngleDelta
+        )
+        if #largestParts > 0 then
+            geometryLines[#geometryLines + 1] = "LARGEST PART OFFSETS:"
+            for index = 1, math.min(10, #largestParts) do
+                local item = largestParts[index]
+                geometryLines[#geometryLines + 1] = string.format(
+                    "%02d %s | Position: %.5f | Angle: %.4f deg",
+                    index, item.Name, item.Position, item.Angle
+                )
+            end
+        else
+            geometryLines[#geometryLines + 1] = "All BasePart local CFrames match saved values"
+        end
+        geometryLines[#geometryLines + 1] = string.format(
+            "BONE PARENTS: %d | MISMATCHES: %d", boneCount, parentMismatches
+        )
+        for index = 1, math.min(10, #hierarchyIssues) do
+            geometryLines[#geometryLines + 1] = string.format("%02d %s", index, hierarchyIssues[index])
+        end
+        geometryLines[#geometryLines + 1] = "SURFACE APPEARANCE MAPS:"
+        for index = 1, math.min(12, #surfaceLines) do
+            geometryLines[#geometryLines + 1] = string.format("%02d %s", index, surfaceLines[index])
+        end
+
+        return model, nil, meshRestoreRecords, skeletonRestoreRecords, table.concat(geometryLines, "\n")
     end
 
     local function formatSkeletonRestoreReport(records)
@@ -1582,7 +1657,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         AccessoryCount = 0
                     }
                 else
-                    local restoredModel, restoreError, meshRestoreRecords, skeletonRestoreRecords = deserializeModel(entry.Data)
+                    local restoredModel, restoreError, meshRestoreRecords, skeletonRestoreRecords, geometryRestoreReport = deserializeModel(entry.Data)
                     if not restoredModel then
                         notify("Entity Import", restoreError, "Error")
                         return false
@@ -1590,6 +1665,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     diagnostic.Compare = formatModelComparison(entry.Data.SourceStats, measureModel(restoredModel))
                     diagnostic.MeshCompare = formatMeshRestoreReport(meshRestoreRecords)
                     diagnostic.SkeletonCompare = formatSkeletonRestoreReport(skeletonRestoreRecords)
+                    diagnostic.GeometryCompare = geometryRestoreReport or "Geometry report unavailable"
                     diagnostic.State = "Portable model reconstructed; comparing source"
                     refreshDiagnostic(true)
                     info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
