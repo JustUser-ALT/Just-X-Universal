@@ -782,16 +782,16 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
             for faceIndex, faceId in ipairs(editableMesh:GetFaces()) do
                 local sourceVertices = editableMesh:GetFaceVertices(faceId)
-                local sourceNormals = editableMesh:GetFaceNormals(faceId)
-                local sourceUVs = editableMesh:GetFaceUVs(faceId)
-                local sourceColors = editableMesh:GetFaceColors(faceId)
+                local sourceNormals = editableMesh:GetFaceNormals(faceId) or {}
+                local sourceUVs = editableMesh:GetFaceUVs(faceId) or {}
+                local sourceColors = editableMesh:GetFaceColors(faceId) or {}
                 local face = {vertices = {}, normals = {}, uvs = {}, colors = {}}
                 for corner, vertexId in ipairs(sourceVertices) do
                     local mapped = vertexMap[vertexId]
                     if not mapped then error("Face references unknown vertex") end
                     face.vertices[corner] = mapped
                     if sourceNormals[corner] then
-                        face.normals[corner] = saveAttribute(normalMap, data.normals, sourceNormals[corner], AssetService.GetEditableMesh and function(mesh,id) return mesh:GetNormal(id) end or function(mesh,id) return mesh:GetNormal(id) end, false)
+                        face.normals[corner] = saveAttribute(normalMap, data.normals, sourceNormals[corner], function(mesh,id) return mesh:GetNormal(id) end, false)
                     end
                     if sourceUVs[corner] then
                         face.uvs[corner] = saveAttribute(uvMap, data.uvs, sourceUVs[corner], function(mesh,id) return mesh:GetUV(id) end, false)
@@ -805,8 +805,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             end
 
             for vertexIndex, vertexId in ipairs(vertexIds) do
-                local sourceBones = editableMesh:GetVertexBones(vertexId)
-                local sourceWeights = editableMesh:GetVertexBoneWeights(vertexId)
+                local sourceBones = editableMesh:GetVertexBones(vertexId) or {}
+                local sourceWeights = editableMesh:GetVertexBoneWeights(vertexId) or {}
                 local startIndex = #data.skin.boneIndices + 1
                 local count = 0
                 for influenceIndex, boneId in ipairs(sourceBones) do
