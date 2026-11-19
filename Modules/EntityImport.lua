@@ -1168,15 +1168,67 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
     local function formatSkeletonRestoreReport(records)
         if type(records) ~= "table" or #records == 0 then return "No Bone/Motor6D restore records" end
-        local lines = {}
-        for index, item in ipairs(records) do
-            if index > 18 then lines[#lines + 1] = string.format("... +%d more", #records - 18) break end
+        local boneCount, motorCount = 0, 0
+        local nonZeroCount, maxPositionDelta, maxAngleDelta = 0, 0, 0
+        local issues = {}
+
+        for _, item in ipairs(records) do
+            local positionDelta = math.max(
+                item.CFramePositionDelta or 0,
+                item.TransformPositionDelta or 0,
+                item.C0PositionDelta or 0,
+                item.C1PositionDelta or 0
+            )
+            local angleDelta = math.max(
+                item.CFrameAngleDelta or 0,
+                item.TransformAngleDelta or 0,
+                item.C0AngleDelta or 0,
+                item.C1AngleDelta or 0
+            )
+
             if item.Class == "Bone" then
-                lines[#lines + 1] = string.format("%02d Bone %s | CFrame delta %.4f/%.3f deg | Transform delta %.4f/%.3f deg | Set:%s/%s", index, tostring(item.Name), item.CFramePositionDelta or 0, item.CFrameAngleDelta or 0, item.TransformPositionDelta or 0, item.TransformAngleDelta or 0, tostring(item.CFrameSet), tostring(item.TransformSet))
-            else
-                lines[#lines + 1] = string.format("%02d Motor6D %s | C0 delta %.4f/%.3f deg | C1 delta %.4f/%.3f deg | Transform delta %.4f/%.3f deg", index, tostring(item.Name), item.C0PositionDelta or 0, item.C0AngleDelta or 0, item.C1PositionDelta or 0, item.C1AngleDelta or 0, item.TransformPositionDelta or 0, item.TransformAngleDelta or 0)
+                boneCount += 1
+            elseif item.Class == "Motor6D" then
+                motorCount += 1
+            end
+
+            maxPositionDelta = math.max(maxPositionDelta, positionDelta)
+            maxAngleDelta = math.max(maxAngleDelta, angleDelta)
+
+            if positionDelta > 0.001 or angleDelta > 0.01
+                or item.CFrameSet == false or item.TransformSet == false then
+                nonZeroCount += 1
+                issues[#issues + 1] = {
+                    Name = tostring(item.Name),
+                    Class = tostring(item.Class),
+                    Position = positionDelta,
+                    Angle = angleDelta
+                }
             end
         end
+
+        table.sort(issues, function(a, b)
+            return math.max(a.Position, a.Angle) > math.max(b.Position, b.Angle)
+        end)
+
+        local lines = {
+            string.format("TOTAL: %d | Bone: %d | Motor6D: %d", #records, boneCount, motorCount),
+            string.format("NONZERO: %d | MAX POSITION: %.4f | MAX ANGLE: %.3f deg", nonZeroCount, maxPositionDelta, maxAngleDelta)
+        }
+
+        if #issues == 0 then
+            lines[#lines + 1] = "All recorded skeleton values match within tolerance"
+        else
+            lines[#lines + 1] = "LARGEST DIFFERENCES:"
+            for index = 1, math.min(12, #issues) do
+                local item = issues[index]
+                lines[#lines + 1] = string.format(
+                    "%02d %s %s | Position: %.4f | Angle: %.3f deg",
+                    index, item.Class, item.Name, item.Position, item.Angle
+                )
+            end
+        end
+
         return table.concat(lines, "\n")
     end
 
