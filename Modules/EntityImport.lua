@@ -15,7 +15,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
     local VISUAL_LIFT = 15
-    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-02"
+    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-03"
     local diagnosticLabel
     local diagnostic = {
         State = "Waiting for entity",
@@ -25,7 +25,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         PreviousY = nil,
         OverwriteDelta = nil,
         PivotY = nil,
-        ModelParent = "none"
+        ModelParent = "none",
+        Compare = "No portable restore comparison yet"
     }
     local lastDiagnosticUpdate = 0
     local entries = {}
@@ -63,7 +64,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         end
 
         diagnosticLabel:Set(string.format(
-            "Build: %s | Lift: %.1f\nState: %s\nModel: %s\nBefore PivotTo Y: %s\nTarget Root Y: %s\nActual Root Y: %s\nPrevious-frame overwrite: %s\nModel Pivot Y: %s",
+            "Build: %s | Lift: %.1f\nState: %s\nModel: %s\nBefore PivotTo Y: %s\nTarget Root Y: %s\nActual Root Y: %s\nPrevious-frame overwrite: %s\nModel Pivot Y: %s\n\n%s",
             DIAGNOSTIC_BUILD,
             VISUAL_LIFT,
             tostring(diagnostic.State),
@@ -72,7 +73,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             fmt(diagnostic.TargetY),
             fmt(diagnostic.ActualY),
             fmt(diagnostic.OverwriteDelta),
-            fmt(diagnostic.PivotY)
+            fmt(diagnostic.PivotY),
+            tostring(diagnostic.Compare)
         ))
     end
 
@@ -193,6 +195,74 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         end
 
         return best, best and "Largest BasePart fallback" or "No BaseParts"
+    end
+
+    local function measureModel(model)
+        local root = pickRoot(model)
+        local stats = {
+            Parts = 0, MeshParts = 0, SpecialMeshes = 0, Unions = 0,
+            Bones = 0, Motor6D = 0, Welds = 0, Constraints = 0,
+            Attachments = 0, Other = 0,
+            RootName = root and root.Name or "none",
+            RootSize = root and root.Size or Vector3.zero,
+            BoundsSize = Vector3.zero, MaxPartSize = Vector3.zero,
+            MaxRootOffset = 0
+        }
+        local maxSize = Vector3.zero
+        for _, object in ipairs(model:GetDescendants()) do
+            if object:IsA("BasePart") then
+                stats.Parts += 1
+                if object:IsA("MeshPart") then stats.MeshParts += 1 end
+                if object:IsA("UnionOperation") then stats.Unions += 1 end
+                maxSize = Vector3.new(math.max(maxSize.X, object.Size.X), math.max(maxSize.Y, object.Size.Y), math.max(maxSize.Z, object.Size.Z))
+                if root then
+                    local offset = root.CFrame:ToObjectSpace(object.CFrame).Position.Magnitude
+                    if offset > stats.MaxRootOffset then stats.MaxRootOffset = offset end
+                end
+            elseif object:IsA("SpecialMesh") then
+                stats.SpecialMeshes += 1
+            elseif object:IsA("Bone") then
+                stats.Bones += 1
+            elseif object:IsA("Motor6D") then
+                stats.Motor6D += 1
+            elseif object:IsA("Weld") or object:IsA("WeldConstraint") or object:IsA("ManualWeld") then
+                stats.Welds += 1
+            elseif object:IsA("Constraint") then
+                stats.Constraints += 1
+            elseif object:IsA("Attachment") then
+                stats.Attachments += 1
+            else
+                stats.Other += 1
+            end
+        end
+        stats.MaxPartSize = maxSize
+        local okBounds, boundsCFrame, boundsSize = pcall(function() return model:GetBoundingBox() end)
+        if okBounds and boundsCFrame and boundsSize then stats.BoundsSize = boundsSize end
+        return stats
+    end
+
+    local function formatModelComparison(source, restored)
+        if type(source) ~= "table" then return "Source stats missing. Re-import with DIAG-03." end
+        if type(restored) ~= "table" then return "Restored stats unavailable." end
+        local function v3(value) return string.format("%.1f / %.1f / %.1f", value.X, value.Y, value.Z) end
+        local function delta(a, b) return string.format("%.1f / %.1f / %.1f", b.X-a.X, b.Y-a.Y, b.Z-a.Z) end
+        return string.format(
+            "SOURCE -> RESTORED\nParts: %d -> %d | MeshPart: %d -> %d\nSpecialMesh: %d -> %d | Union: %d -> %d\nBone: %d -> %d | Motor6D: %d -> %d\nWeld: %d -> %d | Constraint: %d -> %d\nRoot: %s -> %s\nRoot size: %s -> %s\nBounds: %s -> %s\nBounds delta: %s\nMax part: %s -> %s\nMax root offset: %.1f -> %.1f",
+            source.Parts or 0, restored.Parts or 0,
+            source.MeshParts or 0, restored.MeshParts or 0,
+            source.SpecialMeshes or 0, restored.SpecialMeshes or 0,
+            source.Unions or 0, restored.Unions or 0,
+            source.Bones or 0, restored.Bones or 0,
+            source.Motor6D or 0, restored.Motor6D or 0,
+            source.Welds or 0, restored.Welds or 0,
+            source.Constraints or 0, restored.Constraints or 0,
+            tostring(source.RootName), tostring(restored.RootName),
+            v3(source.RootSize), v3(restored.RootSize),
+            v3(source.BoundsSize), v3(restored.BoundsSize),
+            delta(source.BoundsSize, restored.BoundsSize),
+            v3(source.MaxPartSize), v3(restored.MaxPartSize),
+            tonumber(source.MaxRootOffset) or 0, tonumber(restored.MaxRootOffset) or 0
+        )
     end
 
     local function getBodyRotation(rootCFrame)
@@ -771,6 +841,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             PrimaryPartIndex = primaryIndex,
             Nodes = nodes,
             Animations = animations or {},
+            SourceStats = measureModel(model),
             Unsupported = warningNames
         }, warningNames
     end
@@ -1321,6 +1392,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         notify("Entity Import", restoreError, "Error")
                         return false
                     end
+                    diagnostic.Compare = formatModelComparison(entry.Data.SourceStats, measureModel(restoredModel))
+                    diagnostic.State = "Portable model reconstructed; comparing source"
+                    refreshDiagnostic(true)
                     info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
                     restoredModel:Destroy()
                     if info and type(entry.Data.Animations) == "table" then
@@ -1754,7 +1828,18 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 end
 
                 local portableData, unsupportedClasses = serializeModel(info.Template, info.Animations)
-                if portableData and type(info.AvatarDescription) == "table" then
+                if portableData then
+                    local stats = portableData.SourceStats
+                    diagnostic.Compare = string.format(
+                        "SOURCE MODEL CAPTURED\nParts: %d | MeshPart: %d | SpecialMesh: %d | Union: %d\nBone: %d | Motor6D: %d | Weld: %d | Constraint: %d\nRoot: %s | Root size: %.1f / %.1f / %.1f\nBounds: %.1f / %.1f / %.1f | Max root offset: %.1f",
+                        stats.Parts, stats.MeshParts, stats.SpecialMeshes, stats.Unions,
+                        stats.Bones, stats.Motor6D, stats.Welds, stats.Constraints,
+                        stats.RootName, stats.RootSize.X, stats.RootSize.Y, stats.RootSize.Z,
+                        stats.BoundsSize.X, stats.BoundsSize.Y, stats.BoundsSize.Z, stats.MaxRootOffset
+                    )
+                    refreshDiagnostic(true)
+                end
+                if portableData and type(info.AvatarDescription) == 'table' then
                     portableData.AvatarDescription = info.AvatarDescription
                 end
                 if not portableData then
