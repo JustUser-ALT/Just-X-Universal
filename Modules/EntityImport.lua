@@ -993,6 +993,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         mesh.Parent = object
                         meshRecord.Fallback = true
                         meshRecord.Assignment = "SpecialMesh fallback"
+                        meshRecord.RestoredMeshId = tostring(mesh.MeshId or "")
+                        meshRecord.SpecialMeshScale = mesh.Scale
+                        meshRecord.SpecialMeshOffset = mesh.Offset
                     end
                     setEnum(object, "RenderFidelity", Enum.RenderFidelity, props.RenderFidelity)
                     setEnum(object, "CollisionFidelity", Enum.CollisionFidelity, props.CollisionFidelity)
