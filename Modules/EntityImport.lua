@@ -15,6 +15,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
     local VISUAL_LIFT = 15
+    local DISABLE_ENTITY_ANIMATIONS = true -- Temporary diagnostic: test restored rig without imported animation tracks
     local DIAGNOSTIC_BUILD = "ENTITY-DIAG-07"
     local diagnosticLabel
     local diagnostic = {
@@ -93,6 +94,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 tostring(diagnostic.PivotY or "-")),
             "Previous-frame overwrite: " .. tostring(diagnostic.OverwriteDelta or "-"),
             "VISUAL LIFT: " .. tostring(VISUAL_LIFT),
+            "ANIMATIONS DISABLED: " .. tostring(DISABLE_ENTITY_ANIMATIONS),
             "",
             "SOURCE -> RESTORED",
             tostring(diagnostic.Compare),
@@ -1827,32 +1829,31 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 setEntityVisibility(model, cameraHidden)
             end
 
-            local velocity = currentRoot.AssemblyLinearVelocity
-            local speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
-            local state = humanoid:GetState()
-            local wanted = chooseSlot(runtime, humanoid, speed, state)
-            if wanted == "idle" and slots.idle1 and slots.idle2 then
-                wanted = runtime.IdleVariant == 1 and "idle1" or "idle2"
-            end
-            if wanted ~= runtime.Slot then
-                local old = runtime.Slot and runtime.Tracks[runtime.Slot]
-                if old then pcall(function() old:Stop(0.15) end) end
-
-                if wanted == "idle1" or wanted == "idle2" then
-                    runtime.IdleVariant = wanted == "idle1" and 2 or 1
+            if not DISABLE_ENTITY_ANIMATIONS then
+                local velocity = currentRoot.AssemblyLinearVelocity
+                local speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+                local state = humanoid:GetState()
+                local wanted = chooseSlot(runtime, humanoid, speed, state)
+                if wanted == "idle" and slots.idle1 and slots.idle2 then
+                    wanted = runtime.IdleVariant == 1 and "idle1" or "idle2"
                 end
-
-                local track = wanted and loadEntityTrack(runtime, wanted)
-                if track then
-                    local okPlay, playError = pcall(function() track:Play(0.15, 1, 1) end)
-                    if not okPlay then runtime.Errors[#runtime.Errors + 1] = tostring(playError) end
+                if wanted ~= runtime.Slot then
+                    local old = runtime.Slot and runtime.Tracks[runtime.Slot]
+                    if old then pcall(function() old:Stop(0.15) end) end
+                    if wanted == "idle1" or wanted == "idle2" then
+                        runtime.IdleVariant = wanted == "idle1" and 2 or 1
+                    end
+                    local track = wanted and loadEntityTrack(runtime, wanted)
+                    if track then
+                        local okPlay, playError = pcall(function() track:Play(0.15, 1, 1) end)
+                        if not okPlay then runtime.Errors[#runtime.Errors + 1] = tostring(playError) end
+                    end
+                    runtime.Slot = wanted
                 end
-                runtime.Slot = wanted
-            end
-
-            if runtime.Slot == "climb" then
-                local track = runtime.Tracks.climb
-                if track then pcall(function() track:AdjustSpeed(math.abs(velocity.Y) < 0.1 and 0 or 1) end) end
+                if runtime.Slot == "climb" then
+                    local track = runtime.Tracks.climb
+                    if track then pcall(function() track:AdjustSpeed(math.abs(velocity.Y) < 0.1 and 0 or 1) end) end
+                end
             end
         end
 
