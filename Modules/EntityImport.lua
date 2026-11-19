@@ -2,7 +2,7 @@
 -- Imports arbitrary in-game Models/BaseParts into the existing Skin Changer section.
 -- Local visual replacement only; it does not modify the server character.
 
-return function(SkinSection, JL, clearSkinPreview)
+return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     if not SkinSection then error("Entity Import requires the existing Skin Changer section") end
 
     local Players = game:GetService("Players")
@@ -610,6 +610,9 @@ return function(SkinSection, JL, clearSkinPreview)
         stopEntity()
         if type(clearSkinPreview) == "function" then
             pcall(clearSkinPreview)
+        end
+        if type(onEntityStart) == "function" then
+            pcall(onEntityStart)
         end
 
         local character = LocalPlayer.Character
