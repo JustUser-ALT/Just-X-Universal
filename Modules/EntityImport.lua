@@ -945,6 +945,22 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         pcall(function() props.CollisionFidelity = enumName(object.CollisionFidelity) end)
                         pcall(function() props.DoubleSided = object.DoubleSided end)
                         props.PortableMesh = exportEditableMesh(object)
+                        local portableMesh = props.PortableMesh
+                        pcall(print, string.format(
+                            "[ENTITY-PORTABLE] EXPORTED %s | Vertices: %d | Faces: %d | Bones: %d | Skinned: %d | Influences: %d",
+                            object.Name,
+                            #portableMesh.vertices,
+                            #portableMesh.faces,
+                            #portableMesh.bones,
+                            (function()
+                                local count = 0
+                                for _, offset in ipairs(portableMesh.skin.offsets) do
+                                    if (offset[2] or 0) > 0 then count += 1 end
+                                end
+                                return count
+                            end)(),
+                            #portableMesh.skin.boneIndices
+                        ))
                         meshRecord.MeshId = props.MeshId or ""
                         meshRecord.TextureID = props.TextureID or ""
                         meshRecord.Size = props.Size
@@ -1239,7 +1255,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 end
             elseif object:IsA("Bone") then
                 local cframeOk = pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
-                -- Diagnostic: discard the captured pose and restore the neutral bone transform.
+                -- Restore the captured Bone transform exactly.
                 local transformOk = pcall(function() object.Transform = cframeFrom(props.Transform) end)
                 pcall(function() object.Axis = vectorFrom(props.Axis) end)
                 pcall(function() object.SecondaryAxis = vectorFrom(props.SecondaryAxis) end)
@@ -1330,6 +1346,20 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     end
                     meshPart = meshPartOrError
                     editableMeshReferences[#editableMeshReferences + 1] = editableMesh
+                    local portableMesh = props.PortableMesh
+                    local skinnedCount = 0
+                    for _, offset in ipairs(portableMesh.skin.offsets or {}) do
+                        if (offset[2] or 0) > 0 then skinnedCount += 1 end
+                    end
+                    pcall(print, string.format(
+                        "[ENTITY-PORTABLE] RESTORED %s | Vertices: %d | Faces: %d | Bones: %d | Skinned: %d | Influences: %d",
+                        tostring(node.Name),
+                        #(portableMesh.vertices or {}),
+                        #(portableMesh.faces or {}),
+                        #(portableMesh.bones or {}),
+                        skinnedCount,
+                        #(portableMesh.skin.boneIndices or {})
+                    ))
                 else
                     -- Legacy v1/v2 entries may only contain MeshId. Keep their old same-game fallback.
                     meshPart = Instance.new("MeshPart")
@@ -1377,7 +1407,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     object.C1 = cframeFrom(props.C1)
                     if props.Enabled ~= nil then object.Enabled = props.Enabled end
                     if object:IsA("Motor6D") then
-                        -- Diagnostic: discard the captured pose and restore a neutral joint transform.
+                        -- Restore the captured Motor6D transform exactly.
                         object.Transform = cframeFrom(props.Transform)
                         local c0Delta = cframeFrom(props.C0):ToObjectSpace(object.C0)
                         local c1Delta = cframeFrom(props.C1):ToObjectSpace(object.C1)
@@ -1963,7 +1993,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         notify("Entity Import", restoreError, "Error")
                         return false
                     end
-                    pcall(print, "[ENTITY-PORTABLE] Reconstructed portable model | mesh records: " .. tostring(#(meshRestoreRecords or {})) .. " | skeleton records: " .. tostring(#(skeletonRestoreRecords or {})))
+                    pcall(print, "[ENTITY-PORTABLE] Portable model reconstructed successfully: " .. tostring(entry.Name))
                     info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
                     restoredModel:Destroy()
                     if info and type(entry.Data.Animations) == "table" then
