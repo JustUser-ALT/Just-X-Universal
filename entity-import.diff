@@ -1,1258 +1,1154 @@
---- orig.lua	2026-11-18 19:56:39.428707338 +0000
-+++ /mnt/user-data/outputs/Avatar-Z_EntityImport.lua	2026-11-18 19:56:39.424601787 +0000
-@@ -392,6 +392,7 @@
- end
- 
- vars.cleanup = function()	vars.scriptAlive = false
-+	if vars.entityCleanup then pcall(vars.entityCleanup) end
- 	if vars.ui and vars.stopPlayerSelection then pcall(vars.stopPlayerSelection) end
- 	vars.localTryOnBuildId = vars.localTryOnBuildId + 1
- 	vars.localTryOnBuilding = false
-@@ -975,6 +976,16 @@
- 	local newName = tostring(vars.RenameInput.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
- 	if not target or newName == "" then return end
- 
-+	if target.Kind == "Entity" then
-+		target.DisplayName = newName
-+		vars.saveEntityFile()
-+		vars.RenameOverlay.Visible = false
-+		vars.RenameTarget = nil
-+		vars.populateAvatarList()
-+		vars.Status.Text = "[OK] Renamed entity to: " .. newName
-+		return
-+	end
+diff --git a/Modules/Avatar.lua b/Modules/Avatar.lua
+--- a/Modules/Avatar.lua
++++ b/Modules/Avatar.lua
+@@ -1247,7 +1247,7 @@
+     local skinAnimationCleanup
+     local skinPreviewHiddenInFirstPerson = false
+     local previousSkinAnimationMap
++    local stopEntityPreview = function() end
+     
+     local function disconnectSkinPreviewConnections()
+         for name, connection in pairs(skinPreviewConnections) do
+@@ -1510,7 +1510,7 @@
+     end
+     
+     local function buildLocalSkinPreview(data)
++        pcall(stopEntityPreview)
+         if type(data) ~= "table" or type(data.Properties) ~= "table" then
+             error("Saved skin data is invalid")
+         end
+@@ -1716,7 +1716,7 @@
+     end
+     
+     local function resetSkin()
++        pcall(stopEntityPreview)
+         if not originalSkinData then
+             local okOriginal, description = pcall(getCurrentHumanoidDescription)
+             if okOriginal then
+@@ -1830,36 +1830,36 @@
+         Name = "Reset Skin",
+         Callback = resetSkin
+     })
 +
- 	if target.Source == "ava" then
- 		local ok, result = vars.renameAvatarFile(target, newName)
- 		if not ok then vars.showDiagnostics("Failed to rename avatar.", tostring(result)) return end
-@@ -2261,6 +2272,8 @@
- 		end
- 	end
- 
-+	if vars.appendEntityAvatars then vars.appendEntityAvatars() end
++    local function prepareForEntityPreview()
++        activeSkinData = nil
++        if previousSkinAnimationMap ~= nil then
++            activeAnimationMap = previousSkinAnimationMap
++            previousSkinAnimationMap = nil
++            queueAnimationReapply(true)
++        end
++    end
 +
- 	if previousSignature or previousName then
- 		vars.ui.selectedAvatar = nil
- 		for _, data in ipairs(vars.ui.savedAvatars) do
-@@ -3346,6 +3359,20 @@
- 
- vars.buildPreviewTemplate = function(data, cacheKey)	if not data or not data.Properties then return nil end
- 
-+	if data.Kind == "Entity" then
-+		local info = data.Entity
-+		if not info or not info.Template then return nil end
-+		local okClone, entityModel = pcall(function() return info.Template:Clone() end)
-+		if not okClone or not entityModel then return nil end
-+		entityModel.Parent = nil
-+		pcall(function() entityModel:PivotTo(CFrame.new(0, 0, 0)) end)
-+		if cacheKey then
-+			vars.previewModelCache[cacheKey] = entityModel
-+			vars.touchPreviewCache(cacheKey)
-+		end
-+		return entityModel
-+	end
++    local ENTITY_IMPORT_MODULE_URL = "https://raw.githubusercontent.com/JustUser-ALT/Just-X-Universal/main/Modules/EntityImport.lua"
++    local entityModuleOk, EntityImportModule = pcall(function()
++        local source = game:HttpGet(ENTITY_IMPORT_MODULE_URL)
++        local chunk = loadstring(source)
++        if type(chunk) ~= "function" then
++            error("Entity Import module did not compile")
++        end
++        return chunk()
++    end)
 +
- 	local description = vars.reconstructHumanoidDescription(data.Properties)
- 	local rigType = vars.getEnumRigType(data.RigType)
- 	local ok, model = pcall(function()
-@@ -3448,7 +3475,10 @@
- 	vars.previewQueueRunning = false
- end
- 
--vars.getAccessoryCount = function(data)	local props = data and data.Properties
-+vars.getAccessoryCount = function(data)	if data and data.Kind == "Entity" then
-+		return data.Entity and data.Entity.AccessoryCount or 0
-+	end
-+	local props = data and data.Properties
- 	if type(props) ~= "table" then return 0 end
- 
- 	if type(props.AllAccessories) == "table" then
-@@ -3751,6 +3781,7 @@
- 
- vars.deleteAvatar = function(data)
- 	if not data then return end
-+	if data.Kind == "Entity" then return vars.deleteEntityAvatar(data) end
- 	if data.Source == "legacy" then
- 		if type(writefile) ~= "function" then
- 			vars.showDiagnostics("Cannot delete avatar.", "The executor does not provide writefile().")
-@@ -4691,6 +4722,10 @@
- 	vars.settings.lastMethod = vars.placeholderMode and "placeholder" or "normal"
- 	vars.saveSettings()
- 
-+	if selectedData.Kind == "Entity" then
-+		return vars.wearEntity(selectedData)
-+	end
++    if entityModuleOk and type(EntityImportModule) == "function" then
++        local setupOk, stopFunction = pcall(EntityImportModule, SkinSection, JL, clearSkinPreview, prepareForEntityPreview)
++        if setupOk and type(stopFunction) == "function" then
++            stopEntityPreview = stopFunction
++        elseif not setupOk then
++            warn("[Just X Universal] Entity Import setup failed:", stopFunction)
++        end
++    else
++        warn("[Just X Universal] Could not load Entity Import module:", EntityImportModule)
++    end
+     
+     LocalPlayer.CharacterAdded:Connect(function(character)
+         clearSkinPreview()
+diff --git a/Modules/EntityImport.lua b/Modules/EntityImport.lua
+new file mode 100644
+--- /dev/null
++++ b/Modules/EntityImport.lua
+@@ -0,0 +1,1085 @@
++-- Just X Universal - Entity Import
++-- Imports arbitrary in-game Models/BaseParts into the existing Skin Changer section.
++-- Local visual replacement only; it does not modify the server character.
 +
- 	if vars.IS_CATALOG_AVATAR_CREATOR then
- 		local ok, err = vars.wearAvatarThroughCatalog(selectedData)
- 		if ok then
-@@ -5536,6 +5571,1169 @@
- 	end)
- end)
- 
-+-- ====================================================================
-+-- ENTITY IMPORT  (inserted before "bindCharacterLifecycle" startup call)
-+-- Captures an in-game Model by path, lists it next to saved avatars,
-+-- and wears it locally: clone glued to the real character, real
-+-- character hidden locally, every entity part non-colliding/non-touchable.
-+-- Local-only: other players never see it.
-+-- ====================================================================
++return function(SkinSection, JL, clearSkinPreview, onEntityStart)
++    if not SkinSection then error("Entity Import requires the existing Skin Changer section") end
 +
-+vars.ENTITY_FILE_PATH = vars.FOLDER_NAME .. "/SavedEntities.json"
-+vars.ENTITY_RESOLVE_TIMEOUT = 3      -- seconds per path segment (StreamingEnabled waits)
-+vars.ENTITY_SAMPLE_SECONDS = 6       -- how long to watch the source for playing animations
-+vars.ENTITY_SCALE_MIN = 0.05
-+vars.ENTITY_SCALE_MAX = 100
++    local Players = game:GetService("Players")
++    local RunService = game:GetService("RunService")
++    local HttpService = game:GetService("HttpService")
++    local Workspace = game:GetService("Workspace")
++    local LocalPlayer = Players.LocalPlayer
 +
-+vars.ENTITY_DEFAULT_OPTIONS = {
-+	scale = "native",   -- "native" | "fit" | number as text
-+	yaw = 0,            -- degrees added to the facing; UNCALIBRATED, depends on how the rig's root is oriented
-+	yOffset = 0,        -- studs added after ground alignment
-+	alignGround = true, -- entity visual bottom on the player's floor
-+	recenter = true,    -- entity visual centre (XZ) under the player's root
-+	sounds = false,
-+	runSpeed = 20,      -- studs/s at which the "run" animation replaces "walk"; UNCALIBRATED
-+	animMap = "",       -- "idle=Name; run=rbxassetid://123"
-+}
++    local CONFIG_FILE = "JustXUniversal_Entities.json"
++    local RESOLVE_TIMEOUT = 3
++    local SAMPLE_TIME = 2
++    local DEFAULTS = {
++        ScaleMode = "Fit",
++        MovementMode = "Auto",
++        RunThreshold = 0.75
++    }
 +
-+vars.ENTITY_SLOT_LOOPED = {
-+	idle = true, walk = true, run = true, climb = true, swim = true,
-+	swimidle = true, sit = true, fall = true, jump = false,
-+}
-+vars.ENTITY_SLOT_FALLBACK = {
-+	idle = {"idle"},
-+	walk = {"walk", "run", "idle"},
-+	run = {"run", "walk", "idle"},
-+	jump = {"jump", "fall", "idle"},
-+	fall = {"fall", "jump", "idle"},
-+	climb = {"climb", "idle"},
-+	swim = {"swim", "walk", "idle"},
-+	swimidle = {"swimidle", "idle"},
-+	sit = {"sit", "idle"},
-+}
++    local entries = {}
++    local selectedEntry
++    local active
++    local connections = {}
++    local hiddenParts = {}
++    local hiddenDecals = {}
++    local entityPathInput
++    local entityNameInput
++    local entityDropdown
++    local scaleMode = DEFAULTS.ScaleMode
++    local movementMode = DEFAULTS.MovementMode
++    local busy = false
 +
-+vars.entityEntries = {}
-+vars.entitiesLoaded = false
-+vars.entityRuntime = nil
-+vars.entityPanelEntry = nil
++    local function notify(title, desc, kind)
++        if JL and JL.Notify then
++            pcall(function()
++                JL:Notify({
++                    Title = title or "Entity Import",
++                    Desc = tostring(desc or ""),
++                    Type = kind or "Info",
++                    Duration = 5
++                })
++            end)
++        end
++    end
 +
-+-- ---------------------------------------------------------------- pure helpers
++    local function trim(value)
++        return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
++    end
 +
-+vars.entityTrim = function(text)
-+	return (tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
++    local function ensureFolder()
++        if type(makefolder) ~= "function" then return end
++        pcall(function()
++            if type(isfolder) == "function" then
++                if not isfolder("JustXUniversal") then makefolder("JustXUniversal") end
++            else
++                makefolder("JustXUniversal")
++            end
++        end)
++    end
++
++    local function normalizeAnimationId(value)
++        local id = tostring(value or "")
++        local digits = id:match("rbxassetid://(%d+)") or id:match("^(%d+)$")
++        return digits and ("rbxassetid://" .. digits) or nil
++    end
++
++    local function parsePath(path)
++        path = trim(path)
++        if path == "" then return nil, "Path is empty" end
++
++        path = path:gsub("/", ".")
++        path = path:gsub("game:GetService%(%s*['\"]([^'\"]+)['\"]%s*%)", "%1")
++        path = path:gsub(":WaitForChild%(%s*['\"]([^'\"]+)['\"]%s*%)", ".%1")
++        path = path:gsub(":FindFirstChild%(%s*['\"]([^'\"]+)['\"]%s*%)", ".%1")
++        path = path:gsub("%[%s*['\"]([^'\"]+)['\"]%s*%]", ".%1")
++        path = path:gsub("^%.+", ""):gsub("%.+$", "")
++
++        local tokens = {}
++        for token in path:gmatch("[^%.]+") do
++            token = trim(token)
++            if token ~= "" then tokens[#tokens + 1] = token end
++        end
++        if #tokens == 0 then return nil, "No path segments found" end
++        return tokens
++    end
++
++    local function findChild(parent, name)
++        local direct = parent:FindFirstChild(name)
++        if direct then return direct end
++
++        local base, index = name:match("^(.-)#(%d+)$")
++        if base then
++            local count = 0
++            for _, child in ipairs(parent:GetChildren()) do
++                if child.Name == base then
++                    count += 1
++                    if count == tonumber(index) then return child end
++                end
++            end
++        end
++
++        return parent:WaitForChild(name, RESOLVE_TIMEOUT)
++    end
++
++    local function resolvePath(path)
++        local tokens, parseError = parsePath(path)
++        if not tokens then return nil, parseError end
++
++        local current
++        local first = tokens[1]
++        if first:lower() == "game" then
++            current = game
++        elseif first:lower() == "workspace" then
++            current = Workspace
++        else
++            local ok, service = pcall(function() return game:GetService(first) end)
++            current = ok and service or game:FindFirstChild(first)
++            if not current then return nil, "Unknown root: " .. first end
++        end
++
++        for index = 2, #tokens do
++            local name = tokens[index]
++            local nextObject
++            if current == game then
++                local ok, service = pcall(function() return game:GetService(name) end)
++                nextObject = ok and service or game:FindFirstChild(name)
++            else
++                nextObject = findChild(current, name)
++            end
++            if not nextObject then
++                local parentName = "unknown parent"
++                pcall(function() parentName = current:GetFullName() end)
++                return nil, "'" .. name .. "' was not found under " .. parentName
++                    .. ". Check the path or move closer if StreamingEnabled is active."
++            end
++            current = nextObject
++        end
++
++        return current
++    end
++
++    local function pickRoot(model)
++        if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then
++            return model.PrimaryPart, "PrimaryPart"
++        end
++
++        for _, name in ipairs({"HumanoidRootPart", "RootPart", "Root", "Torso", "UpperTorso", "Body", "Main"}) do
++            local part = model:FindFirstChild(name, true)
++            if part and part:IsA("BasePart") then return part, name end
++        end
++
++        local best, bestVolume
++        for _, object in ipairs(model:GetDescendants()) do
++            if object:IsA("BasePart") then
++                local size = object.Size
++                local volume = size.X * size.Y * size.Z
++                if not bestVolume or volume > bestVolume then
++                    best, bestVolume = object, volume
++                end
++            end
++        end
++
++        return best, best and "Largest BasePart fallback" or "No BaseParts"
++    end
++
++    local function getBodyRotation(rootCFrame)
++        local look = rootCFrame.LookVector
++        local yaw = 0
++        if math.abs(look.Y) < 0.98 then yaw = math.atan2(-look.X, -look.Z) end
++        return CFrame.Angles(0, -yaw, 0) * rootCFrame.Rotation
++    end
++
++    local function computeBounds(model, root, bodyRotation)
++        local minimum = Vector3.new(math.huge, math.huge, math.huge)
++        local maximum = Vector3.new(-math.huge, -math.huge, -math.huge)
++        local count = 0
++
++        for _, part in ipairs(model:GetDescendants()) do
++            if part:IsA("BasePart") and part.Transparency < 0.98 then
++                local half = part.Size / 2
++                for _, x in ipairs({-1, 1}) do
++                    for _, y in ipairs({-1, 1}) do
++                        for _, z in ipairs({-1, 1}) do
++                            local worldPoint = (part.CFrame * CFrame.new(x * half.X, y * half.Y, z * half.Z)).Position
++                            local point = bodyRotation:VectorToWorldSpace(root.CFrame:PointToObjectSpace(worldPoint))
++                            minimum = Vector3.new(
++                                math.min(minimum.X, point.X),
++                                math.min(minimum.Y, point.Y),
++                                math.min(minimum.Z, point.Z)
++                            )
++                            maximum = Vector3.new(
++                                math.max(maximum.X, point.X),
++                                math.max(maximum.Y, point.Y),
++                                math.max(maximum.Z, point.Z)
++                            )
++                        end
++                    end
++                end
++                count += 1
++            end
++        end
++
++        if count == 0 then return nil end
++        return {
++            Min = minimum,
++            Max = maximum,
++            Size = maximum - minimum,
++            Center = (minimum + maximum) / 2
++        }
++    end
++
++    local function classifyAnimation(name, group)
++        local n = tostring(name or ""):lower():gsub("[^%w]", "")
++        local g = tostring(group or ""):lower():gsub("[^%w]", "")
++        local combined = g .. " " .. n
++
++        if combined:find("swimidle", 1, true) then return "swimidle" end
++        if combined:find("swim", 1, true) then return "swim" end
++        if combined:find("climb", 1, true) or combined:find("ladder", 1, true) then return "climb" end
++        if combined:find("sit", 1, true) or combined:find("seat", 1, true) then return "sit" end
++        if combined:find("jump", 1, true) or combined:find("leap", 1, true) then return "jump" end
++        if combined:find("fall", 1, true) then return "fall" end
++        if combined:find("run", 1, true) or combined:find("sprint", 1, true) or combined:find("chase", 1, true) then return "run" end
++        if combined:find("walk", 1, true) or combined:find("move", 1, true) or combined:find("crawl", 1, true) then return "walk" end
++        if n == "animation2" and g:find("idle", 1, true) then return "idle2" end
++        if n == "animation1" and g:find("idle", 1, true) then return "idle1" end
++        if combined:find("idle", 1, true) or combined:find("stand", 1, true) or combined:find("breath", 1, true) then return "idle" end
++        return nil
++    end
++
++    local function addAnimation(list, seen, id, name, group, priority)
++        local normalized = normalizeAnimationId(id)
++        if not normalized or seen[normalized] then return end
++        seen[normalized] = true
++        list[#list + 1] = {
++            Id = normalized,
++            Name = tostring(name or "Animation"),
++            Group = tostring(group or ""),
++            Priority = priority and tostring(priority):match("([^%.]+)$") or nil
++        }
++    end
++
++    local function captureEntity(path)
++        local source, resolveError = resolvePath(path)
++        if not source then return nil, resolveError end
++        local sourceIsPart = source:IsA("BasePart")
++        local sourceIsContainer = source:IsA("Folder") or source:IsA("Accessory") or source:IsA("Tool")
++        if not source:IsA("Model") and not sourceIsPart and not sourceIsContainer then
++            return nil, source:GetFullName() .. " is a " .. source.ClassName .. "; expected a Model, Folder, Accessory, Tool, or BasePart"
++        end
++
++        local unlocked = {}
++        local function unlock(object)
++            if not object.Archivable then
++                unlocked[#unlocked + 1] = object
++                pcall(function() object.Archivable = true end)
++            end
++        end
++
++        unlock(source)
++        for _, object in ipairs(source:GetDescendants()) do unlock(object) end
++
++        local okClone, clone = pcall(function() return source:Clone() end)
++        for _, object in ipairs(unlocked) do pcall(function() object.Archivable = false end) end
++        if not okClone or not clone then
++            return nil, "Clone() failed: " .. tostring(clone)
++        end
++
++        if sourceIsPart or sourceIsContainer then
++            local wrapper = Instance.new("Model")
++            wrapper.Name = clone.Name
++            clone.Parent = wrapper
++            if sourceIsPart then wrapper.PrimaryPart = clone end
++            clone = wrapper
++        end
++
++        local info = {
++            Template = clone,
++            Path = path,
++            Name = source.Name,
++            Animations = {},
++            Warnings = {},
++            PartCount = 0,
++            AccessoryCount = 0
++        }
++
++        local seenAnimations = {}
++        for _, object in ipairs(clone:GetDescendants()) do
++            if object:IsA("Animation") then
++                local parentName = object.Parent and object.Parent.Name or ""
++                addAnimation(info.Animations, seenAnimations, object.AnimationId, object.Name, parentName)
++            end
++        end
++
++        local sourceAnimators = {}
++        for _, object in ipairs(source:GetDescendants()) do
++            if object:IsA("Animator") then sourceAnimators[#sourceAnimators + 1] = object end
++        end
++
++        -- Sample animations already running on the original entity before its scripts are stripped.
++        local sampleDeadline = os.clock() + SAMPLE_TIME
++        repeat
++            for _, animator in ipairs(sourceAnimators) do
++                local okTracks, tracks = pcall(function() return animator:GetPlayingAnimationTracks() end)
++                if okTracks and tracks then
++                    for _, track in ipairs(tracks) do
++                        local animation = track.Animation
++                        if animation then
++                            addAnimation(
++                                info.Animations,
++                                seenAnimations,
++                                animation.AnimationId,
++                                track.Name ~= "" and track.Name or animation.Name,
++                                track.Name,
++                                track.Priority
++                            )
++                        end
++                    end
++                end
++            end
++            task.wait(0.15)
++        until os.clock() >= sampleDeadline or not source.Parent
++
++        local toDestroy = {}
++        for _, object in ipairs(clone:GetDescendants()) do
++            if object:IsA("Script") or object:IsA("LocalScript") then
++                toDestroy[#toDestroy + 1] = object
++            elseif object:IsA("JointInstance") or object:IsA("WeldConstraint") then
++                local p0, p1 = object.Part0, object.Part1
++                if (p0 and not p0:IsDescendantOf(clone)) or (p1 and not p1:IsDescendantOf(clone)) then
++                    toDestroy[#toDestroy + 1] = object
++                end
++            elseif object:IsA("Constraint") then
++                local a0, a1 = object.Attachment0, object.Attachment1
++                if (a0 and not a0:IsDescendantOf(clone)) or (a1 and not a1:IsDescendantOf(clone)) then
++                    toDestroy[#toDestroy + 1] = object
++                end
++            elseif object:IsA("Sound") then
++                pcall(function() object:SetAttribute("JXEntityWasPlaying", object.Playing) object.Playing = false end)
++            end
++        end
++        for _, object in ipairs(toDestroy) do pcall(function() object:Destroy() end) end
++
++        local partCount = 0
++        for _, object in ipairs(clone:GetDescendants()) do
++            if object:IsA("BasePart") then partCount += 1 end
++            if object:IsA("Accessory") then info.AccessoryCount += 1 end
++        end
++        info.PartCount = partCount
++
++        local root, rootMethod = pickRoot(clone)
++        if not root then
++            clone:Destroy()
++            return nil, "The model contains no BaseParts"
++        end
++
++        local bodyRotation = getBodyRotation(root.CFrame)
++        local bounds = computeBounds(clone, root, bodyRotation)
++        if not bounds then
++            clone:Destroy()
++            return nil, "Could not measure the entity bounds"
++        end
++
++        info.RootName = root.Name
++        info.RootMethod = rootMethod
++        info.BodyRotation = bodyRotation
++        info.Bounds = bounds
++        if #unlocked > 0 then
++            info.Warnings[#info.Warnings + 1] = tostring(#unlocked) .. " non-Archivable instances were temporarily unlocked"
++        end
++        if #info.Animations == 0 then
++            info.Warnings[#info.Warnings + 1] = "No Animation objects or active animation tracks were found"
++        end
++
++        return info
++    end
++
++    local function disablePart(part)
++        if not part:IsA("BasePart") then return end
++        pcall(function()
++            part.CanCollide = false
++            part.CanTouch = false
++            part.CanQuery = false
++            part.Massless = true
++        end)
++    end
++
++    local function weldDetachedParts(model, root)
++        local parent = {}
++        local parts = {}
++        for _, object in ipairs(model:GetDescendants()) do
++            if object:IsA("BasePart") then
++                parent[object] = object
++                parts[#parts + 1] = object
++            end
++        end
++
++        local function find(part)
++            while parent[part] ~= part do
++                parent[part] = parent[parent[part]]
++                part = parent[part]
++            end
++            return part
++        end
++
++        local function union(a, b)
++            a, b = find(a), find(b)
++            if a ~= b then parent[a] = b end
++        end
++
++        for _, object in ipairs(model:GetDescendants()) do
++            if object:IsA("JointInstance") or object:IsA("WeldConstraint") then
++                local p0, p1 = object.Part0, object.Part1
++                local enabled = true
++                pcall(function() enabled = object.Enabled end)
++                if enabled and p0 and p1 and parent[p0] and parent[p1] then
++                    union(p0, p1)
++                end
++            end
++        end
++
++        local count = 0
++        for _, part in ipairs(parts) do
++            if find(part) ~= find(root) then
++                local weld = Instance.new("WeldConstraint")
++                weld.Name = "JXEntityWeld"
++                weld.Part0 = root
++                weld.Part1 = part
++                weld.Parent = part
++                union(part, root)
++                count += 1
++            end
++        end
++        return count
++    end
++
++    local function restoreCharacter()
++        for part, old in pairs(hiddenParts) do
++            if part and part.Parent then pcall(function() part.LocalTransparencyModifier = old end) end
++        end
++        table.clear(hiddenParts)
++
++        for decal, old in pairs(hiddenDecals) do
++            if decal and decal.Parent then pcall(function() decal.Transparency = old end) end
++        end
++        table.clear(hiddenDecals)
++    end
++
++    local function hideCharacterObject(object, character)
++        if not object or not character or not object:IsDescendantOf(character) then return end
++        if object:FindFirstAncestorOfClass("Tool") then return end
++
++        if object:IsA("BasePart") then
++            if hiddenParts[object] == nil then hiddenParts[object] = object.LocalTransparencyModifier end
++            object.LocalTransparencyModifier = 1
++        elseif object:IsA("Decal") or object:IsA("Texture") then
++            if hiddenDecals[object] == nil then hiddenDecals[object] = object.Transparency end
++            object.Transparency = 1
++        end
++    end
++
++    local function disconnectAll()
++        for key, connection in pairs(connections) do
++            if connection then pcall(function() connection:Disconnect() end) end
++            connections[key] = nil
++        end
++    end
++
++    local function stopEntity()
++        disconnectAll()
++        if active then
++            for _, track in pairs(active.Tracks or {}) do
++                if track then pcall(function() track:Stop(0) end) end
++            end
++            for _, animation in ipairs(active.AnimationObjects or {}) do
++                pcall(function() animation:Destroy() end)
++            end
++            if active.Model then pcall(function() active.Model:Destroy() end) end
++        end
++        active = nil
++        restoreCharacter()
++    end
++
++    local function buildSlots(animations)
++        local slots = {}
++        for _, animation in ipairs(animations or {}) do
++            local slot = classifyAnimation(animation.Name, animation.Group)
++            if slot then
++                slots[slot] = slots[slot] or animation
++            end
++        end
++        if not slots.idle then slots.idle = slots.idle1 or slots.idle2 end
++        return slots
++    end
++
++    local function getAnimationPriority(slot, saved)
++        if saved and Enum.AnimationPriority[saved] then return Enum.AnimationPriority[saved] end
++        if slot == "idle" or slot == "idle1" or slot == "idle2" then return Enum.AnimationPriority.Idle end
++        if slot == "jump" or slot == "fall" or slot == "sit" then return Enum.AnimationPriority.Action end
++        return Enum.AnimationPriority.Movement
++    end
++
++    local function loadEntityTrack(runtime, slot)
++        if runtime.Tracks[slot] ~= nil then return runtime.Tracks[slot] or nil end
++        local source = runtime.Slots[slot]
++        if not source then runtime.Tracks[slot] = false return nil end
++
++        local animationObject = Instance.new("Animation")
++        animationObject.AnimationId = source.Id
++        runtime.AnimationObjects[#runtime.AnimationObjects + 1] = animationObject
++
++        local okLoad, trackOrError = pcall(function()
++            local track = runtime.Animator:LoadAnimation(animationObject)
++            track.Priority = getAnimationPriority(slot, source.Priority)
++            track.Looped = slot == "idle" or slot == "idle1" or slot == "idle2"
++                or slot == "walk" or slot == "run" or slot == "climb" or slot == "swim" or slot == "swimidle"
++            return track
++        end)
++
++        if not okLoad or not trackOrError then
++            runtime.Tracks[slot] = false
++            runtime.Errors[#runtime.Errors + 1] = slot .. ": " .. tostring(trackOrError)
++            return nil
++        end
++
++        runtime.Tracks[slot] = trackOrError
++        return trackOrError
++    end
++
++    local function chooseSlot(runtime, humanoid, speed, state)
++        local wanted
++        if humanoid.Sit or state == Enum.HumanoidStateType.Seated then
++            wanted = "sit"
++        elseif state == Enum.HumanoidStateType.Climbing then
++            wanted = "climb"
++        elseif state == Enum.HumanoidStateType.Swimming then
++            wanted = speed > 1 and "swim" or "swimidle"
++        elseif state == Enum.HumanoidStateType.Jumping then
++            wanted = "jump"
++        elseif state == Enum.HumanoidStateType.Freefall then
++            wanted = "fall"
++        elseif speed > 0.5 then
++            local threshold = math.max(10, humanoid.WalkSpeed * DEFAULTS.RunThreshold)
++            if movementMode == "Auto" and runtime.Slots.run and speed >= threshold then
++                wanted = "run"
++            else
++                wanted = "walk"
++            end
++        else
++            if runtime.Slots.idle1 and runtime.Slots.idle2 then
++                wanted = runtime.IdleVariant == 1 and "idle1" or "idle2"
++            else
++                wanted = "idle"
++            end
++        end
++
++        local fallbacks = {
++            idle = {"idle", "idle1", "idle2"},
++            idle1 = {"idle1", "idle", "idle2"},
++            idle2 = {"idle2", "idle", "idle1"},
++            walk = {"walk", "run", "idle"},
++            run = {"run", "walk", "idle"},
++            jump = {"jump", "fall", "idle"},
++            fall = {"fall", "jump", "idle"},
++            climb = {"climb", "walk", "idle"},
++            swim = {"swim", "walk", "idle"},
++            swimidle = {"swimidle", "idle"},
++            sit = {"sit", "idle"}
++        }
++
++        for _, candidate in ipairs(fallbacks[wanted] or {"idle"}) do
++            if runtime.Slots[candidate] then return candidate end
++        end
++        return nil
++    end
++
++    local function isFirstPerson(character)
++        local camera = Workspace.CurrentCamera
++        local head = character and character:FindFirstChild("Head", true)
++        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
++        if not camera or not head or not humanoid then return false end
++        local distance = (camera.CFrame.Position - head.Position).Magnitude
++        local follows = camera.CameraSubject == humanoid
++            or (camera.CameraSubject and camera.CameraSubject:IsDescendantOf(character))
++        return follows and distance <= 1.65
++    end
++
++    local function setEntityVisibility(model, hidden)
++        for _, object in ipairs(model:GetDescendants()) do
++            if object:IsA("BasePart") then
++                object.LocalTransparencyModifier = hidden and 1 or 0
++            elseif object:IsA("Decal") or object:IsA("Texture") then
++                pcall(function() object.LocalTransparencyModifier = hidden and 1 or 0 end)
++            end
++        end
++    end
++
++    local function getPlayerFloorOffset(humanoid, root)
++        local below = humanoid.HipHeight + root.Size.Y / 2
++        if humanoid.RigType == Enum.HumanoidRigType.R6 then
++            local leg = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Left Leg")
++            below += leg and leg.Size.Y or 2
++        end
++        return below
++    end
++
++    local function applyEntity(entry)
++        stopEntity()
++        if type(clearSkinPreview) == "function" then
++            pcall(clearSkinPreview)
++        end
++        if type(onEntityStart) == "function" then
++            pcall(onEntityStart)
++        end
++
++        local character = LocalPlayer.Character
++        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
++        local playerRoot = character and (character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart)
++        if not character or not humanoid or not playerRoot then
++            notify("Entity Import", "Your character is not ready yet.", "Error")
++            return false
++        end
++
++        local info = entry.Info
++        if not info or not info.Template or not info.Template:IsA("Model") then
++            local captureError
++            info, captureError = captureEntity(entry.Path)
++            if not info then
++                notify("Entity Import", captureError, "Error")
++                return false
++            end
++            entry.Info = info
++        end
++
++        local model = info.Template:Clone()
++        model.Name = "JustXEntityPreview"
++
++        local cloneHumanoid = model:FindFirstChildOfClass("Humanoid")
++        if cloneHumanoid then
++            pcall(function()
++                cloneHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
++                cloneHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
++                cloneHumanoid.RequiresNeck = false
++                cloneHumanoid.AutomaticScalingEnabled = false
++                cloneHumanoid.EvaluateStateMachine = false
++                for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
++                    if state ~= Enum.HumanoidStateType.None then cloneHumanoid:SetStateEnabled(state, false) end
++                end
++                cloneHumanoid:ChangeState(Enum.HumanoidStateType.None)
++            end)
++        end
++
++        for _, object in ipairs(model:GetDescendants()) do
++            if object:IsA("BasePart") then
++                object.Anchored = false
++                disablePart(object)
++                object.LocalTransparencyModifier = 0
++            elseif object:IsA("BillboardGui") or object:IsA("ProximityPrompt") then
++                pcall(function() object.Enabled = false end)
++            elseif object:IsA("ClickDetector") then
++                pcall(function() object.MaxActivationDistance = 0 end)
++            elseif object:IsA("Seat") or object:IsA("VehicleSeat") then
++                pcall(function() object.Disabled = true end)
++            elseif object:IsA("Sound") then
++                pcall(function() object.Playing = false end)
++            end
++        end
++
++        local playerHeight = 5
++        pcall(function() playerHeight = character:GetExtentsSize().Y end)
++        local entityHeight = math.max(info.Bounds.Size.Y, 0.01)
++        local scale = scaleMode == "Fit" and math.clamp(playerHeight / entityHeight, 0.05, 100) or 1
++        if math.abs(scale - 1) > 0.0001 then
++            local okScale = pcall(function() model:ScaleTo(model:GetScale() * scale) end)
++            if not okScale then scale = 1 end
++        end
++
++        local root = pickRoot(model)
++        if not root then
++            model:Destroy()
++            notify("Entity Import", "The cloned model has no usable root part.", "Error")
++            return false
++        end
++
++        weldDetachedParts(model, root)
++        root.Anchored = true
++        for _, object in ipairs(model:GetDescendants()) do
++            if object:IsA("BasePart") then disablePart(object) end
++        end
++
++        local controller = model:FindFirstChildWhichIsA("Humanoid", true)
++            or model:FindFirstChildWhichIsA("AnimationController", true)
++        if not controller then
++            controller = Instance.new("AnimationController")
++            controller.Name = "JXEntityAnimationController"
++            controller.Parent = model
++        end
++        local animator = controller:FindFirstChildOfClass("Animator")
++        if not animator then
++            animator = Instance.new("Animator")
++            animator.Parent = controller
++        end
++
++        local slots = buildSlots(info.Animations)
++        local bodyRotation = getBodyRotation(root.CFrame)
++        local bounds = computeBounds(model, root, bodyRotation)
++        if not bounds then
++            model:Destroy()
++            notify("Entity Import", "Could not measure the cloned model after scaling.", "Error")
++            return false
++        end
++
++        local entityParts = {}
++        for _, object in ipairs(model:GetDescendants()) do
++            if object:IsA("BasePart") then entityParts[#entityParts + 1] = object end
++        end
++
++        local runtime = {
++            Model = model,
++            BodyRotation = bodyRotation,
++            Bounds = bounds,
++            Parts = entityParts,
++            Root = root,
++            Character = character,
++            Humanoid = humanoid,
++            PlayerRoot = playerRoot,
++            Animator = animator,
++            Slots = slots,
++            Tracks = {},
++            AnimationObjects = {},
++            Errors = {},
++            Slot = nil,
++            IdleVariant = math.random(1, 2),
++            Scale = scale,
++            Info = info
++        }
++
++        local function positionEntity()
++            local currentRoot = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
++            if not currentRoot then return end
++
++            local look = currentRoot.CFrame.LookVector
++            local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
++            local facing = CFrame.Angles(0, yaw, 0)
++            local floorBelow = getPlayerFloorOffset(humanoid, currentRoot)
++            local offsetY = -floorBelow - bounds.Min.Y
++            local horizontal = facing:VectorToWorldSpace(Vector3.new(bounds.Center.X, 0, bounds.Center.Z))
++            local position = Vector3.new(
++                currentRoot.Position.X - horizontal.X,
++                currentRoot.Position.Y + offsetY,
++                currentRoot.Position.Z - horizontal.Z
++            )
++            root.CFrame = CFrame.new(position) * facing * bodyRotation
++        end
++
++        positionEntity()
++        model.Parent = Workspace
++        RunService.Heartbeat:Wait()
++        if not model:IsDescendantOf(Workspace) or not root.Parent then
++            model:Destroy()
++            notify("Entity Import", "The experience removed the local clone from Workspace.", "Error")
++            return false
++        end
++
++        active = runtime
++        for _, object in ipairs(character:GetDescendants()) do
++            hideCharacterObject(object, character)
++        end
++        connections.CharacterAdded = character.DescendantAdded:Connect(function(object)
++            hideCharacterObject(object, character)
++        end)
++
++        local visibleInFirstPerson = false
++        local function update()
++            if active ~= runtime then return end
++            if LocalPlayer.Character ~= character or not character.Parent then
++                stopEntity()
++                return
++            end
++            if not model.Parent or not root.Parent then
++                stopEntity()
++                notify("Entity Import", "The game removed the local entity clone; your original character was restored.", "Warn")
++                return
++            end
++
++            local currentRoot = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
++            if not currentRoot then return end
++
++            local look = currentRoot.CFrame.LookVector
++            local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
++            local facing = CFrame.Angles(0, yaw, 0)
++            local floorBelow = getPlayerFloorOffset(humanoid, currentRoot)
++            local offsetY = -floorBelow - runtime.Bounds.Min.Y
++            local horizontal = facing:VectorToWorldSpace(Vector3.new(runtime.Bounds.Center.X, 0, runtime.Bounds.Center.Z))
++            local position = Vector3.new(
++                currentRoot.Position.X - horizontal.X,
++                currentRoot.Position.Y + offsetY,
++                currentRoot.Position.Z - horizontal.Z
++            )
++            root.CFrame = CFrame.new(position) * facing * runtime.BodyRotation
++
++            local cameraHidden = isFirstPerson(character)
++            if cameraHidden ~= visibleInFirstPerson then
++                visibleInFirstPerson = cameraHidden
++                setEntityVisibility(model, cameraHidden)
++            end
++
++            local velocity = currentRoot.AssemblyLinearVelocity
++            local speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
++            local state = humanoid:GetState()
++            local wanted = chooseSlot(runtime, humanoid, speed, state)
++            if wanted == "idle" and slots.idle1 and slots.idle2 then
++                wanted = runtime.IdleVariant == 1 and "idle1" or "idle2"
++            end
++            if wanted ~= runtime.Slot then
++                local old = runtime.Slot and runtime.Tracks[runtime.Slot]
++                if old then pcall(function() old:Stop(0.15) end) end
++
++                if wanted == "idle1" or wanted == "idle2" then
++                    runtime.IdleVariant = wanted == "idle1" and 2 or 1
++                end
++
++                local track = wanted and loadEntityTrack(runtime, wanted)
++                if track then
++                    local okPlay, playError = pcall(function() track:Play(0.15, 1, 1) end)
++                    if not okPlay then runtime.Errors[#runtime.Errors + 1] = tostring(playError) end
++                end
++                runtime.Slot = wanted
++            end
++
++            if runtime.Slot == "climb" then
++                local track = runtime.Tracks.climb
++                if track then pcall(function() track:AdjustSpeed(math.abs(velocity.Y) < 0.1 and 0 or 1) end) end
++            end
++        end
++
++        connections.Render = RunService.RenderStepped:Connect(update)
++        connections.PreSimulation = RunService.PreSimulation:Connect(function()
++            if active ~= runtime then return end
++            for _, part in ipairs(runtime.Parts) do
++                if part and part.Parent then disablePart(part) end
++            end
++        end)
++
++        update()
++        local animationNames = {}
++        for slot in pairs(slots) do animationNames[#animationNames + 1] = slot end
++        table.sort(animationNames)
++
++        local summary = string.format(
++            "Loaded %s | %.2fx scale | %d parts | animations: %s",
++            entry.Name,
++            scale,
++            info.PartCount,
++            #animationNames > 0 and table.concat(animationNames, ", ") or "none"
++        )
++        if #runtime.Errors > 0 then
++            summary ..= " | animation errors: " .. table.concat(runtime.Errors, " / ")
++        end
++        notify("Entity Import", summary, #runtime.Errors > 0 and "Warn" or "Success")
++        return true
++    end
++
++    local function loadConfig()
++        entries = {}
++        if type(isfile) ~= "function" or type(readfile) ~= "function" then return end
++        local ok, raw = pcall(function()
++            if not isfile(CONFIG_FILE) then return nil end
++            return readfile(CONFIG_FILE)
++        end)
++        if not ok or type(raw) ~= "string" or raw == "" then return end
++
++        local decodedOk, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
++        if not decodedOk or type(decoded) ~= "table" then return end
++        for _, item in ipairs(decoded) do
++            if type(item) == "table" and type(item.Path) == "string" and item.Path ~= "" then
++                entries[#entries + 1] = {
++                    Path = item.Path,
++                    Name = tostring(item.Name or item.Path),
++                    Info = nil
++                }
++            end
++        end
++    end
++
++    local function saveConfig()
++        if type(writefile) ~= "function" then return false end
++        ensureFolder()
++        local serializable = {}
++        for _, item in ipairs(entries) do
++            serializable[#serializable + 1] = {Path = item.Path, Name = item.Name}
++        end
++        return pcall(function()
++            writefile(CONFIG_FILE, HttpService:JSONEncode(serializable))
++        end)
++    end
++
++    local function getEntryNames()
++        local names = {}
++        for _, item in ipairs(entries) do
++            names[#names + 1] = item.Name .. "  [" .. item.Path .. "]"
++        end
++        return names
++    end
++
++    local function findEntry(option)
++        if type(option) ~= "string" then return nil end
++        for _, item in ipairs(entries) do
++            if option == item.Name .. "  [" .. item.Path .. "]" then return item end
++        end
++        return nil
++    end
++
++    local function refreshDropdown()
++        if entityDropdown and entityDropdown.Refresh then
++            pcall(function() entityDropdown:Refresh() end)
++        end
++    end
++
++    loadConfig()
++
++    local pathInput = SkinSection:Input({
++        Name = "Entity Model Path",
++        Placeholder = "workspace.Monsters.Mimic",
++        Flag = "JXU_EntityPath"
++    })
++    entityPathInput = pathInput
++
++    entityNameInput = SkinSection:Input({
++        Name = "Entity Name (Optional)",
++        Placeholder = "Leave empty to use model name",
++        Flag = "JXU_EntityName"
++    })
++
++    SkinSection:Dropdown({
++        Name = "Entity Scale",
++        Options = {"Auto Fit", "Native"},
++        Search = false,
++        MultiSelect = false,
++        Flag = "JXU_EntityScale",
++        Callback = function(value)
++            scaleMode = value == "Native" and "Native" or "Fit"
++        end
++    })
++
++    SkinSection:Dropdown({
++        Name = "Movement Animations",
++        Options = {"Auto (Walk + Run)", "Walk Only"},
++        Search = false,
++        MultiSelect = false,
++        Flag = "JXU_EntityMovementMode",
++        Callback = function(value)
++            movementMode = value == "Walk Only" and "Walk Only" or "Auto"
++        end
++    })
++
++    SkinSection:Button({
++        Name = "Import / Update Entity",
++        Callback = function()
++            if busy then return end
++            local path = trim(pathInput:Get())
++            if path == "" then
++                notify("Entity Import", "Enter a Model path first.", "Info")
++                return
++            end
++
++            busy = true
++            task.spawn(function()
++                local info, captureError = captureEntity(path)
++                busy = false
++                if not info then
++                    notify("Entity Import", captureError, "Error")
++                    return
++                end
++
++                local customName = trim(entityNameInput:Get())
++                local entry = nil
++                for _, saved in ipairs(entries) do
++                    if saved.Path:lower() == path:lower() then entry = saved break end
++                end
++
++                if entry then
++                    if active and active.Info == entry.Info then stopEntity() end
++                    if entry.Info and entry.Info.Template then
++                        pcall(function() entry.Info.Template:Destroy() end)
++                    end
++                    entry.Info = info
++                    if customName ~= "" then entry.Name = customName end
++                else
++                    entry = {
++                        Path = path,
++                        Name = customName ~= "" and customName or info.Name,
++                        Info = info
++                    }
++                    entries[#entries + 1] = entry
++                end
++
++                selectedEntry = entry
++                saveConfig()
++                refreshDropdown()
++                local found = {}
++                for _, animation in ipairs(info.Animations) do
++                    local slot = classifyAnimation(animation.Name, animation.Group)
++                    if slot then found[slot] = true end
++                end
++                local names = {}
++                for slot in pairs(found) do names[#names + 1] = slot end
++                table.sort(names)
++                notify(
++                    "Entity Import",
++                    string.format("%s imported: %d parts, %d accessories, animations: %s",
++                        entry.Name, info.PartCount, info.AccessoryCount,
++                        #names > 0 and table.concat(names, ", ") or "none detected"),
++                    #names > 0 and "Success" or "Warn"
++                )
++            end)
++        end
++    })
++
++    entityDropdown = SkinSection:Dropdown({
++        Name = "Saved Entities",
++        Options = getEntryNames,
++        Search = true,
++        MultiSelect = false,
++        Flag = "JXU_SavedEntities",
++        Callback = function(value)
++            if type(value) == "table" then
++                selectedEntry = nil
++                for option, selected in pairs(value) do
++                    if selected then selectedEntry = findEntry(option) break end
++                end
++            else
++                selectedEntry = findEntry(value)
++            end
++        end
++    })
++
++    SkinSection:Button({
++        Name = "Load Entity",
++        Callback = function()
++            if not selectedEntry then
++                notify("Entity Import", "Select a saved entity first.", "Info")
++                return
++            end
++            applyEntity(selectedEntry)
++        end
++    })
++
++    SkinSection:Button({
++        Name = "Delete Entity",
++        Callback = function()
++            if not selectedEntry then
++                notify("Entity Import", "Select a saved entity first.", "Info")
++                return
++            end
++            if active and active.Info == selectedEntry.Info then stopEntity() end
++            for index = #entries, 1, -1 do
++                if entries[index] == selectedEntry then table.remove(entries, index) end
++            end
++            if selectedEntry.Info and selectedEntry.Info.Template then
++                pcall(function() selectedEntry.Info.Template:Destroy() end)
++            end
++            local deletedName = selectedEntry.Name
++            selectedEntry = nil
++            saveConfig()
++            refreshDropdown()
++            notify("Entity Import", "Deleted " .. deletedName, "Success")
++        end
++    })
++
++    SkinSection:Button({
++        Name = "Stop Entity Preview",
++        Callback = stopEntity
++    })
++
++    LocalPlayer.CharacterAdded:Connect(function()
++        stopEntity()
++    end)
++
++    return stopEntity
 +end
 +
-+vars.normalizeEntityOptions = function(raw)
-+	raw = type(raw) == "table" and raw or {}
-+	local d = vars.ENTITY_DEFAULT_OPTIONS
-+	local function num(value, default, lo, hi)
-+		value = tonumber(value)
-+		if not value or value ~= value or value == math.huge or value == -math.huge then return default end
-+		return math.clamp(value, lo, hi)
-+	end
-+	local function bool(value, default)
-+		if type(value) == "boolean" then return value end
-+		return default
-+	end
-+	local scale = string.lower(vars.entityTrim(raw.scale == nil and d.scale or raw.scale))
-+	if scale == "" then scale = "native" end
-+	if scale ~= "native" and scale ~= "fit" and not tonumber(scale) then scale = "native" end
-+	return {
-+		scale = scale,
-+		yaw = num(raw.yaw, d.yaw, -360, 360),
-+		yOffset = num(raw.yOffset, d.yOffset, -1000, 1000),
-+		alignGround = bool(raw.alignGround, d.alignGround),
-+		recenter = bool(raw.recenter, d.recenter),
-+		sounds = bool(raw.sounds, d.sounds),
-+		runSpeed = num(raw.runSpeed, d.runSpeed, 0.1, 1000),
-+		animMap = tostring(raw.animMap or d.animMap),
-+	}
-+end
-+
-+-- Returns tokens (strings) or nil, errorMessage.
-+-- Accepts: workspace.Monsters.Mimic | game.Workspace.Monsters["Mimic"] |
-+-- game:GetService("Workspace").Monsters:FindFirstChild("Mimic") | workspace/Monsters/Mimic | Mimic#2 (2nd child named Mimic)
-+vars.parseInstancePath = function(text)
-+	text = vars.entityTrim(text)
-+	if text == "" then return nil, "path is empty" end
-+	local tokens = {}
-+	local i, n = 1, #text
-+	while i <= n do
-+		local c = text:sub(i, i)
-+		if c == "." or c == "/" or c == " " then
-+			i += 1
-+		elseif c == "[" then
-+			local quote = text:sub(i + 1, i + 1)
-+			if quote ~= '"' and quote ~= "'" then return nil, "bracket index must be quoted (char " .. i .. ")" end
-+			local close = text:find(quote .. "]", i + 2, true)
-+			if not close then return nil, "unterminated [..] (char " .. i .. ")" end
-+			tokens[#tokens + 1] = text:sub(i + 2, close - 1)
-+			i = close + 2
-+		elseif c == ":" then
-+			local method, arg = text:match("^:(%a+)%(%s*[\"']([^\"']*)[\"']", i)
-+			if not method then return nil, "unsupported method call (char " .. i .. ")" end
-+			if method ~= "GetService" and method ~= "WaitForChild" and method ~= "FindFirstChild" then
-+				return nil, "only GetService/WaitForChild/FindFirstChild are supported (char " .. i .. ")"
-+			end
-+			local closeParen = text:find(")", i, true)
-+			if not closeParen then return nil, "unterminated call (char " .. i .. ")" end
-+			tokens[#tokens + 1] = arg
-+			i = closeParen + 1
-+		else
-+			local _, e = text:find("^[^%.%[:/]+", i)
-+			local name = vars.entityTrim(text:sub(i, e))
-+			if name ~= "" then tokens[#tokens + 1] = name end
-+			i = e + 1
-+		end
-+	end
-+	if #tokens == 0 then return nil, "no path segments found" end
-+	return tokens
-+end
-+
-+vars.getBodyRotation = function(rootCFrame)
-+	local look = rootCFrame.LookVector
-+	local yaw0 = 0
-+	if math.abs(look.Y) < 0.98 then yaw0 = math.atan2(-look.X, -look.Z) end
-+	return CFrame.Angles(0, -yaw0, 0) * rootCFrame.Rotation, yaw0
-+end
-+
-+-- Axis-aligned bounds of all parts in the "normalized frame": origin at the root,
-+-- upright, forward = -Z. visible = parts with Transparency < 0.95 (falls back to all).
-+vars.computeEntityBounds = function(parts, rootCFrame, bodyRotation)
-+	local function newBox()
-+		return {min = Vector3.new(math.huge, math.huge, math.huge), max = Vector3.new(-math.huge, -math.huge, -math.huge), count = 0}
-+	end
-+	local visible, full = newBox(), newBox()
-+	local function add(box, point)
-+		box.min = Vector3.new(math.min(box.min.X, point.X), math.min(box.min.Y, point.Y), math.min(box.min.Z, point.Z))
-+		box.max = Vector3.new(math.max(box.max.X, point.X), math.max(box.max.Y, point.Y), math.max(box.max.Z, point.Z))
-+	end
-+	for _, part in ipairs(parts) do
-+		local size = part.Size
-+		local finite = size.X == size.X and size.Y == size.Y and size.Z == size.Z
-+		if finite then
-+			local isVisible = part.Transparency < 0.95
-+			local half = size / 2
-+			for _, sx in ipairs({-1, 1}) do
-+				for _, sy in ipairs({-1, 1}) do
-+					for _, sz in ipairs({-1, 1}) do
-+						local worldPoint = (part.CFrame * CFrame.new(sx * half.X, sy * half.Y, sz * half.Z)).Position
-+						local normalized = bodyRotation:VectorToWorldSpace(rootCFrame:PointToObjectSpace(worldPoint))
-+						add(full, normalized)
-+						if isVisible then add(visible, normalized) end
-+					end
-+				end
-+			end
-+			full.count += 1
-+			if isVisible then visible.count += 1 end
-+		end
-+	end
-+	if full.count == 0 then return nil end
-+	local used = visible.count > 0 and visible or full
-+	return {
-+		min = used.min,
-+		max = used.max,
-+		size = used.max - used.min,
-+		center = (used.min + used.max) / 2,
-+		fullSize = full.max - full.min,
-+		visibleOnly = used == visible and visible.count < full.count,
-+	}
-+end
-+
-+vars.resolveEntityScale = function(spec, entityHeight, playerHeight)
-+	local text = string.lower(vars.entityTrim(spec))
-+	local value = 1
-+	if text == "fit" then
-+		if entityHeight and entityHeight > 0 and playerHeight and playerHeight > 0 then value = playerHeight / entityHeight end
-+	elseif text ~= "" and text ~= "native" then
-+		value = tonumber(text) or 1
-+	end
-+	if value ~= value then value = 1 end
-+	return math.clamp(value, vars.ENTITY_SCALE_MIN, vars.ENTITY_SCALE_MAX)
-+end
-+
-+vars.classifyEntityAnimation = function(name, group)
-+	local s = string.lower(tostring(group or "") .. " " .. tostring(name or ""))
-+	local function has(...)
-+		for _, key in ipairs({...}) do
-+			if s:find(key, 1, true) then return true end
-+		end
-+		return false
-+	end
-+	if has("swimidle") or (has("swim") and has("idle")) then return "swimidle" end
-+	if has("swim") then return "swim" end
-+	if has("climb", "ladder") then return "climb" end
-+	if has("sit", "seat") then return "sit" end
-+	if has("jump", "leap") then return "jump" end
-+	if has("fall") then return "fall" end
-+	if has("run", "sprint", "chase") then return "run" end
-+	if has("walk", "move", "stroll", "crawl", "slither") then return "walk" end
-+	if has("idle", "stand", "breath") then return "idle" end
-+	return nil
-+end
-+
-+vars.buildEntitySlots = function(animations, mapText)
-+	local slots, warnings = {}, {}
-+	for _, anim in ipairs(animations or {}) do
-+		local slot = vars.classifyEntityAnimation(anim.Name, anim.Group)
-+		if slot and not slots[slot] then slots[slot] = anim end
-+	end
-+	mapText = vars.entityTrim(mapText)
-+	if mapText ~= "" then
-+		for piece in mapText:gmatch("[^;,\n]+") do
-+			local key, value = piece:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
-+			if key then
-+				key = string.lower(key)
-+				if vars.ENTITY_SLOT_LOOPED[key] == nil then
-+					warnings[#warnings + 1] = "unknown slot '" .. key .. "'"
-+				elseif string.lower(value) == "none" or string.lower(value) == "off" then
-+					slots[key] = nil
-+				else
-+					local digits = value:match("^rbxassetid://(%d+)$") or value:match("^(%d+)$")
-+					if digits then
-+						slots[key] = {Id = "rbxassetid://" .. digits, Name = "map:" .. key, Group = "", Source = "map"}
-+					else
-+						local found
-+						for _, anim in ipairs(animations or {}) do
-+							if string.lower(anim.Name) == string.lower(value) then found = anim break end
-+						end
-+						if found then slots[key] = found else warnings[#warnings + 1] = "no animation named '" .. value .. "'" end
-+					end
-+				end
-+			end
-+		end
-+	end
-+	return slots, warnings
-+end
-+
-+vars.pickEntitySlot = function(motion, slots, runSpeed)
-+	local wanted
-+	if motion.seated then
-+		wanted = "sit"
-+	elseif motion.climbing then
-+		wanted = "climb"
-+	elseif motion.swimming then
-+		wanted = motion.speed > 1 and "swim" or "swimidle"
-+	elseif motion.jumping then
-+		wanted = "jump"
-+	elseif motion.falling then
-+		wanted = "fall"
-+	elseif motion.speed > 0.5 then
-+		wanted = motion.speed >= runSpeed and "run" or "walk"
-+	else
-+		wanted = "idle"
-+	end
-+	for _, candidate in ipairs(vars.ENTITY_SLOT_FALLBACK[wanted]) do
-+		if slots[candidate] then return candidate end
-+	end
-+	return nil
-+end
-+
-+vars.pickEntityRoot = function(model)
-+	local primary = model.PrimaryPart
-+	if primary and primary:IsA("BasePart") then return primary, "PrimaryPart" end
-+	local hrp = model:FindFirstChild("HumanoidRootPart", true)
-+	if hrp and hrp:IsA("BasePart") then return hrp, "HumanoidRootPart" end
-+	for _, name in ipairs({"RootPart", "Root", "Torso", "UpperTorso", "Body", "Main"}) do
-+		local part = model:FindFirstChild(name, true)
-+		if part and part:IsA("BasePart") then return part, "name match '" .. name .. "'" end
-+	end
-+	local best, bestVolume
-+	for _, descendant in ipairs(model:GetDescendants()) do
-+		if descendant:IsA("BasePart") then
-+			local volume = descendant.Size.X * descendant.Size.Y * descendant.Size.Z
-+			if not bestVolume or volume > bestVolume then best, bestVolume = descendant, volume end
-+		end
-+	end
-+	if best then return best, "largest part (no PrimaryPart / HumanoidRootPart)" end
-+	return nil, "no BaseParts"
-+end
-+
-+-- ---------------------------------------------------------------- resolve + capture
-+
-+vars.findChildForPath = function(parent, name, timeout)
-+	local direct = parent:FindFirstChild(name)
-+	if direct then return direct end
-+	local base, index = name:match("^(.-)#(%d+)$")
-+	if base and index then
-+		local count = 0
-+		for _, child in ipairs(parent:GetChildren()) do
-+			if child.Name == base then
-+				count += 1
-+				if count == tonumber(index) then return child end
-+			end
-+		end
-+	end
-+	return parent:WaitForChild(name, timeout)
-+end
-+
-+vars.resolveInstancePath = function(text, timeout)
-+	local tokens, parseError = vars.parseInstancePath(text)
-+	if not tokens then return nil, parseError end
-+	local first = tokens[1]
-+	local current
-+	if string.lower(first) == "game" then
-+		current = game
-+	elseif string.lower(first) == "workspace" then
-+		current = vars.Workspace
-+	else
-+		local ok, service = pcall(function() return game:GetService(first) end)
-+		current = ok and service or game:FindFirstChild(first)
-+		if not current then return nil, "unknown root '" .. first .. "'" end
-+	end
-+	for index = 2, #tokens do
-+		local name = tokens[index]
-+		local nextInstance
-+		if current == game then
-+			local ok, service = pcall(function() return game:GetService(name) end)
-+			nextInstance = ok and service or game:FindFirstChild(name)
-+		else
-+			nextInstance = vars.findChildForPath(current, name, timeout)
-+		end
-+		if not nextInstance then
-+			return nil, "'" .. name .. "' not found under " .. current:GetFullName()
-+				.. " (wrong path, or not streamed in yet: walk near it and retry)"
-+		end
-+		current = nextInstance
-+	end
-+	return current
-+end
-+
-+vars.getEntityLeafName = function(path)
-+	local tokens = vars.parseInstancePath(path)
-+	return tokens and tokens[#tokens] or tostring(path)
-+end
-+
-+vars.captureEntity = function(path, options)
-+	local source, resolveError = vars.resolveInstancePath(path, vars.ENTITY_RESOLVE_TIMEOUT)
-+	if not source then return nil, resolveError end
-+	if not vars.scriptAlive then return nil, "script unloaded" end
-+
-+	local isModel = source:IsA("Model")
-+	local isPart = source:IsA("BasePart")
-+	if not isModel and not isPart then
-+		return nil, source:GetFullName() .. " is a " .. source.ClassName .. "; need a Model or a BasePart"
-+	end
-+
-+	local info = {Warnings = {}, Animations = {}, Removed = {Scripts = 0, Joints = 0, Constraints = 0}, SourceName = source:GetFullName(), SourceClass = source.ClassName}
-+
-+	local unlocked = {}
-+	local function unlock(instance)
-+		if not instance.Archivable then
-+			unlocked[#unlocked + 1] = instance
-+			pcall(function() instance.Archivable = true end)
-+		end
-+	end
-+	unlock(source)
-+	for _, descendant in ipairs(source:GetDescendants()) do unlock(descendant) end
-+	local okClone, clone = pcall(function() return source:Clone() end)
-+	for _, instance in ipairs(unlocked) do pcall(function() instance.Archivable = false end) end
-+	if not okClone or not clone then
-+		return nil, "Clone() failed: " .. tostring(clone)
-+	end
-+	if #unlocked > 0 then
-+		info.Warnings[#info.Warnings + 1] = #unlocked .. " non-archivable instance(s) were temporarily unlocked to copy them"
-+	end
-+
-+	if isPart and not isModel then
-+		local wrapper = Instance.new("Model")
-+		wrapper.Name = clone.Name
-+		clone.Parent = wrapper
-+		wrapper.PrimaryPart = clone
-+		clone = wrapper
-+	end
-+
-+	if vars.Workspace.StreamingEnabled and isModel then
-+		local okMode, mode = pcall(function() return source.ModelStreamingMode end)
-+		if okMode and mode ~= Enum.ModelStreamingMode.Persistent and mode ~= Enum.ModelStreamingMode.Atomic then
-+			info.Warnings[#info.Warnings + 1] = "StreamingEnabled and the model is not Atomic/Persistent: the copy may be missing streamed-out parts"
-+		end
-+	end
-+
-+	-- animations first (scripts that hold them are removed below)
-+	local seenIds = {}
-+	local function addAnimation(id, name, group, sourceKind)
-+		id = tostring(id or "")
-+		if id == "" or seenIds[id] then return end
-+		seenIds[id] = true
-+		info.Animations[#info.Animations + 1] = {Id = id, Name = tostring(name or "Animation"), Group = tostring(group or ""), Source = sourceKind}
-+	end
-+	local descendants = clone:GetDescendants()
-+	for _, instance in ipairs(descendants) do
-+		if instance:IsA("Animation") then
-+			local group = instance.Parent and not instance.Parent:IsA("Model") and instance.Parent.Name or ""
-+			addAnimation(instance.AnimationId, instance.Name, group, "instance")
-+		end
-+	end
-+	info.AnimatorCount = 0
-+	local sourceAnimators = {}
-+	for _, instance in ipairs(source:GetDescendants()) do
-+		if instance:IsA("Animator") then sourceAnimators[#sourceAnimators + 1] = instance end
-+	end
-+	info.AnimatorCount = #sourceAnimators
-+
-+	-- sanitize
-+	local toDestroy = {}
-+	for _, instance in ipairs(descendants) do
-+		if instance:IsA("LuaSourceContainer") and not instance:IsA("ModuleScript") then
-+			toDestroy[#toDestroy + 1] = instance
-+			info.Removed.Scripts += 1
-+		elseif instance:IsA("JointInstance") or instance:IsA("WeldConstraint") then
-+			local p0, p1 = instance.Part0, instance.Part1
-+			if (p0 and not p0:IsDescendantOf(clone)) or (p1 and not p1:IsDescendantOf(clone)) then
-+				toDestroy[#toDestroy + 1] = instance
-+				info.Removed.Joints += 1
-+			end
-+		elseif instance:IsA("Constraint") then
-+			local a0, a1 = instance.Attachment0, instance.Attachment1
-+			if (a0 and not a0:IsDescendantOf(clone)) or (a1 and not a1:IsDescendantOf(clone)) then
-+				toDestroy[#toDestroy + 1] = instance
-+				info.Removed.Constraints += 1
-+			end
-+		elseif instance:IsA("Sound") then
-+			pcall(function()
-+				instance:SetAttribute("EntityWasPlaying", instance.Playing)
-+				instance.Playing = false
-+			end)
-+		end
-+	end
-+	for _, instance in ipairs(toDestroy) do pcall(function() instance:Destroy() end) end
-+	clone.Parent = nil
-+
-+	local parts = {}
-+	local accessoryCount = 0
-+	for _, instance in ipairs(clone:GetDescendants()) do
-+		if instance:IsA("BasePart") then parts[#parts + 1] = instance end
-+		if instance:IsA("Accessory") then accessoryCount += 1 end
-+		if instance:IsA("Humanoid") then info.HasHumanoid = true end
-+	end
-+	if #parts == 0 then
-+		pcall(function() clone:Destroy() end)
-+		return nil, source:GetFullName() .. " contains no BaseParts"
-+	end
-+
-+	local root, how = vars.pickEntityRoot(clone)
-+	local bodyRotation, yaw0 = vars.getBodyRotation(root.CFrame)
-+	info.Template = clone
-+	info.PartCount = #parts
-+	info.AccessoryCount = accessoryCount
-+	info.RootName = root.Name
-+	info.RootHow = how
-+	info.RootYaw = yaw0
-+	info.Bounds = vars.computeEntityBounds(parts, root.CFrame, bodyRotation)
-+	if info.Bounds and info.Bounds.visibleOnly then
-+		info.Warnings[#info.Warnings + 1] = string.format("invisible parts enlarge the full box (%.1f studs tall vs %.1f visible); placement uses visible parts", info.Bounds.fullSize.Y, info.Bounds.size.Y)
-+	end
-+	if math.abs(root.CFrame.UpVector.Y) < 0.9 then
-+		info.Warnings[#info.Warnings + 1] = "root part is not upright in the world; the body may be tilted, adjust with yaw / check in game"
-+	end
-+
-+	-- keep watching the original for animations it plays at runtime
-+	if #sourceAnimators > 0 then
-+		task.spawn(function()
-+			local deadline = os.clock() + vars.ENTITY_SAMPLE_SECONDS
-+			while vars.scriptAlive and os.clock() < deadline and source.Parent do
-+				local added = false
-+				for _, animator in ipairs(sourceAnimators) do
-+					local ok, tracks = pcall(function() return animator:GetPlayingAnimationTracks() end)
-+					if ok and tracks then
-+						for _, track in ipairs(tracks) do
-+							local animation = track.Animation
-+							if animation and animation.AnimationId ~= "" and not seenIds[animation.AnimationId] then
-+								addAnimation(animation.AnimationId, track.Name ~= "" and track.Name or animation.Name, "", "sampled")
-+								added = true
-+							end
-+						end
-+					end
-+				end
-+				if added and info.OnAnimationsChanged then pcall(info.OnAnimationsChanged) end
-+				task.wait(0.15)
-+			end
-+			info.SampleDone = true
-+			if info.OnAnimationsChanged then pcall(info.OnAnimationsChanged) end
-+		end)
-+	else
-+		info.SampleDone = true
-+	end
-+
-+	return info
-+end
-+
-+-- ---------------------------------------------------------------- wear
-+
-+vars.prepareEntityClone = function(model, options)
-+	for _, instance in ipairs(model:GetDescendants()) do
-+		if instance:IsA("Humanoid") then
-+			instance.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-+			pcall(function() instance.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff end)
-+			pcall(function() instance.RequiresNeck = false end)
-+			pcall(function() instance.AutomaticScalingEnabled = false end)
-+			pcall(function() instance.EvaluateStateMachine = false end)
-+			pcall(function()
-+				for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
-+					if state ~= Enum.HumanoidStateType.None then instance:SetStateEnabled(state, false) end
-+				end
-+				instance:ChangeState(Enum.HumanoidStateType.None)
-+			end)
-+		elseif instance:IsA("Sound") then
-+			pcall(function() instance.Playing = options.sounds and instance:GetAttribute("EntityWasPlaying") == true end)
-+		elseif instance:IsA("BillboardGui") then
-+			pcall(function() instance.Enabled = false end)
-+		elseif instance:IsA("ProximityPrompt") then
-+			pcall(function() instance.Enabled = false end)
-+		elseif instance:IsA("ClickDetector") then
-+			pcall(function() instance.MaxActivationDistance = 0 end)
-+		elseif instance:IsA("Seat") or instance:IsA("VehicleSeat") then
-+			pcall(function() instance.Disabled = true end)
-+		end
-+	end
-+end
-+
-+-- Rigidly weld every part that is not joint-connected to the root, so nothing falls or drifts.
-+vars.weldDetachedParts = function(model, root)
-+	local parts, parent = {}, {}
-+	for _, instance in ipairs(model:GetDescendants()) do
-+		if instance:IsA("BasePart") then
-+			parts[#parts + 1] = instance
-+			parent[instance] = instance
-+		end
-+	end
-+	local function find(x)
-+		while parent[x] ~= x do
-+			parent[x] = parent[parent[x]]
-+			x = parent[x]
-+		end
-+		return x
-+	end
-+	local function union(a, b)
-+		a, b = find(a), find(b)
-+		if a ~= b then parent[a] = b end
-+	end
-+	for _, instance in ipairs(model:GetDescendants()) do
-+		if instance:IsA("JointInstance") or instance:IsA("WeldConstraint") then
-+			local p0, p1 = instance.Part0, instance.Part1
-+			if instance.Enabled and p0 and p1 and parent[p0] and parent[p1] then union(p0, p1) end
-+		end
-+	end
-+	local welded = 0
-+	for _, part in ipairs(parts) do
-+		if find(part) ~= find(root) then
-+			local weld = Instance.new("WeldConstraint")
-+			weld.Name = "EntityGlue"
-+			weld.Part0 = root
-+			weld.Part1 = part
-+			weld.Parent = part
-+			union(part, root)
-+			welded += 1
-+		end
-+	end
-+	return welded
-+end
-+
-+vars.getPlayerFloorBelowRoot = function(humanoid, rootPart, legPart)
-+	local below = humanoid.HipHeight + rootPart.Size.Y / 2
-+	if humanoid.RigType == Enum.HumanoidRigType.R6 then
-+		below += legPart and legPart.Size.Y or 2
-+	end
-+	return below
-+end
-+
-+vars.entityStopRuntime = function()
-+	local runtime = vars.entityRuntime
-+	vars.entityRuntime = nil
-+	if not runtime then return end
-+	for _, track in pairs(runtime.tracks) do
-+		if track then pcall(function() track:Stop(0) end) end
-+	end
-+	for _, animation in ipairs(runtime.loadedAnimations) do pcall(function() animation:Destroy() end) end
-+end
-+
-+vars.entityGetTrack = function(runtime, slot)
-+	local cached = runtime.tracks[slot]
-+	if cached ~= nil then return cached or nil end
-+	local anim = runtime.slots[slot]
-+	if not anim or not runtime.animator then
-+		runtime.tracks[slot] = false
-+		return nil
-+	end
-+	local ok, trackOrError = pcall(function()
-+		local animation = Instance.new("Animation")
-+		animation.AnimationId = anim.Id
-+		runtime.loadedAnimations[#runtime.loadedAnimations + 1] = animation
-+		local track = runtime.animator:LoadAnimation(animation)
-+		track.Looped = vars.ENTITY_SLOT_LOOPED[slot] == true and true or track.Looped
-+		return track
-+	end)
-+	if ok and trackOrError then
-+		runtime.tracks[slot] = trackOrError
-+		return trackOrError
-+	end
-+	runtime.tracks[slot] = false
-+	runtime.animErrors[#runtime.animErrors + 1] = slot .. ": " .. tostring(trackOrError)
-+	return nil
-+end
-+
-+vars.entityStep = function()
-+	if not vars.scriptAlive then return end
-+	local runtime = vars.entityRuntime
-+	if not runtime then return end
-+
-+	if not runtime.model:IsDescendantOf(vars.Workspace) or not runtime.root.Parent then
-+		if vars.tryOnActive and not vars.localTryOnBuilding then
-+			vars.stopLocalTryOn(false)
-+			vars.Status.Text = "[!] Entity was removed by this experience. Original avatar restored."
-+			vars.showDiagnostics("Entity wear unavailable in this experience.", "The cloned entity was removed after creation (the game likely purges unknown Workspace models). Your real avatar was restored.")
-+		end
-+		return
-+	end
-+
-+	local character = vars.LocalPlayer.Character
-+	if character ~= runtime.character or not character or not character.Parent then
-+		vars.stopLocalTryOn(vars.tryOnActive)
-+		vars.updateWearButtonState()
-+		if vars.tryOnActive then vars.Status.Text = "[...] Character respawning..." end
-+		return
-+	end
-+	local humanoid = runtime.humanoid
-+	local hrp = runtime.hrp
-+	if not humanoid.Parent or not hrp.Parent then return end
-+
-+	local options = runtime.options
-+	local cf = hrp.CFrame
-+	local look = cf.LookVector
-+	local yaw = runtime.lastYaw
-+	if math.abs(look.Y) < 0.98 then yaw = math.atan2(-look.X, -look.Z) end
-+	runtime.lastYaw = yaw
-+	local facing = CFrame.Angles(0, yaw + math.rad(options.yaw), 0)
-+
-+	local floorBelow = vars.getPlayerFloorBelowRoot(humanoid, hrp, runtime.legPart)
-+	local offsetY
-+	if options.alignGround then
-+		offsetY = -floorBelow - runtime.bounds.min.Y + options.yOffset
-+	else
-+		offsetY = -runtime.bounds.center.Y + options.yOffset
-+	end
-+	local horizontal = options.recenter and facing:VectorToWorldSpace(Vector3.new(runtime.bounds.center.X, 0, runtime.bounds.center.Z)) or Vector3.zero
-+	local position = Vector3.new(cf.Position.X - horizontal.X, cf.Position.Y + offsetY, cf.Position.Z - horizontal.Z)
-+	runtime.root.CFrame = CFrame.new(position) * facing * runtime.bodyRotation
-+
-+	vars.enforceLocalTryOnNoCollision()
-+	vars.enforceCharacterHidden()
-+	vars.setLocalTryOnFirstPersonVisibility(vars.isFirstPersonCamera(character))
-+
-+	if runtime.animator and next(runtime.slots) ~= nil then
-+		local velocity = hrp.AssemblyLinearVelocity
-+		local state = humanoid:GetState()
-+		local seatPart = humanoid.SeatPart
-+		local motion = {
-+			speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude,
-+			seated = humanoid.Sit or seatPart ~= nil or state == Enum.HumanoidStateType.Seated,
-+			climbing = state == Enum.HumanoidStateType.Climbing,
-+			swimming = state == Enum.HumanoidStateType.Swimming,
-+			jumping = state == Enum.HumanoidStateType.Jumping,
-+			falling = state == Enum.HumanoidStateType.Freefall,
-+		}
-+		local slot = vars.pickEntitySlot(motion, runtime.slots, options.runSpeed)
-+		if slot ~= runtime.slot then
-+			local old = runtime.slot and runtime.tracks[runtime.slot]
-+			if old then pcall(function() old:Stop(0.2) end) end
-+			local track = slot and vars.entityGetTrack(runtime, slot)
-+			if track then pcall(function() track:Play(0.2) end) end
-+			runtime.slot = slot
-+		end
-+		if runtime.slot == "climb" then
-+			local track = runtime.tracks[runtime.slot]
-+			if track then pcall(function() track:AdjustSpeed(math.abs(velocity.Y) < 0.1 and 0 or 1) end) end
-+		end
-+	end
-+end
-+
-+vars.wearEntity = function(data)
-+	if vars.localTryOnBuilding then return end
-+	local character = vars.LocalPlayer.Character
-+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-+	local hrp = character and (character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart)
-+	if not character or not character.Parent or not humanoid or not hrp then
-+		vars.showDiagnostics("Entity wear failed.", "Your character (Humanoid + root part) is not available yet.")
-+		return
-+	end
-+
-+	vars.tryOnActive = true
-+	vars.stopLocalTryOn(true)
-+	vars.localTryOnBuildId += 1
-+	local buildId = vars.localTryOnBuildId
-+	vars.localTryOnBuilding = true
-+	vars.Status.Text = "[...] Building entity: " .. tostring(data.DisplayName)
-+	vars.clearDiagnostics()
-+
-+	local function stillCurrent()
-+		return vars.scriptAlive and buildId == vars.localTryOnBuildId
-+	end
-+
-+	local model
-+	local ok, err = xpcall(function()
-+		if not data.Entity or not data.Entity.Template then
-+			local info, captureError = vars.captureEntity(data.Path, data.Options)
-+			if not info then error(captureError, 0) end
-+			data.Entity = info
-+			vars.clearPreviewModelCache()
-+		end
-+		if not stillCurrent() then return end
-+		local info = data.Entity
-+		local options = vars.normalizeEntityOptions(data.Options)
-+
-+		model = info.Template:Clone()
-+		model.Name = "LocalWearer_LocalTryOn"
-+		vars.prepareEntityClone(model, options)
-+
-+		local playerHeight = 5
-+		pcall(function() playerHeight = character:GetExtentsSize().Y end)
-+		local entityHeight = info.Bounds and info.Bounds.size.Y or 0
-+		local scale = vars.resolveEntityScale(options.scale, entityHeight, playerHeight)
-+		local scaleNote = ""
-+		if math.abs(scale - 1) > 1e-4 then
-+			local scaled = pcall(function() model:ScaleTo(model:GetScale() * scale) end)
-+			if not scaled then
-+				scale = 1
-+				scaleNote = " (ScaleTo failed, worn at native size)"
-+			end
-+		end
-+
-+		for _, instance in ipairs(model:GetDescendants()) do
-+			if instance:IsA("BasePart") then
-+				instance.Anchored = false
-+				vars.disableLocalTryOnCollision(instance)
-+				instance.LocalTransparencyModifier = 0
-+			end
-+		end
-+		vars.setLocalTryOnConnection("collision", model.DescendantAdded, vars.disableLocalTryOnCollision)
-+		vars.setLocalTryOnConnection("preSimulation", vars.RunService.PreSimulation, vars.enforceLocalTryOnNoCollision)
-+
-+		local root, rootHow = vars.pickEntityRoot(model)
-+		if not root then error("entity has no BaseParts", 0) end
-+		local glued = vars.weldDetachedParts(model, root)
-+		root.Anchored = true
-+
-+		local parts = {}
-+		for _, instance in ipairs(model:GetDescendants()) do
-+			if instance:IsA("BasePart") then parts[#parts + 1] = instance end
-+		end
-+		local bodyRotation = vars.getBodyRotation(root.CFrame)
-+		local bounds = vars.computeEntityBounds(parts, root.CFrame, bodyRotation)
-+		if not bounds then error("could not measure the entity", 0) end
-+
-+		local legPart = character:FindFirstChild("Left Leg")
-+		local runtime = {
-+			model = model, root = root, character = character, humanoid = humanoid, hrp = hrp, legPart = legPart,
-+			options = options, bodyRotation = bodyRotation, bounds = bounds, lastYaw = 0,
-+			tracks = {}, loadedAnimations = {}, animErrors = {}, slot = nil,
-+		}
-+		runtime.slots = vars.buildEntitySlots(info.Animations, options.animMap)
-+
-+		local animator
-+		local controller = model:FindFirstChildWhichIsA("Humanoid", true) or model:FindFirstChildWhichIsA("AnimationController", true)
-+		if not controller then
-+			controller = Instance.new("AnimationController")
-+			controller.Parent = model
-+		end
-+		animator = controller:FindFirstChildOfClass("Animator")
-+		if not animator then
-+			animator = Instance.new("Animator")
-+			animator.Parent = controller
-+		end
-+		runtime.animator = animator
-+
-+		-- place before parenting so there is no frame at the wrong spot
-+		local look = hrp.CFrame.LookVector
-+		local yaw = math.abs(look.Y) < 0.98 and math.atan2(-look.X, -look.Z) or 0
-+		runtime.lastYaw = yaw
-+		local facing = CFrame.Angles(0, yaw + math.rad(options.yaw), 0)
-+		local floorBelow = vars.getPlayerFloorBelowRoot(humanoid, hrp, legPart)
-+		local offsetY = options.alignGround and (-floorBelow - bounds.min.Y + options.yOffset) or (-bounds.center.Y + options.yOffset)
-+		local horizontal = options.recenter and facing:VectorToWorldSpace(Vector3.new(bounds.center.X, 0, bounds.center.Z)) or Vector3.zero
-+		local startPosition = Vector3.new(hrp.Position.X - horizontal.X, hrp.Position.Y + offsetY, hrp.Position.Z - horizontal.Z)
-+		local targetRoot = CFrame.new(startPosition) * facing * bodyRotation
-+		model:PivotTo(targetRoot * root.CFrame:ToObjectSpace(model:GetPivot()))
-+		model.Parent = vars.Workspace
-+
-+		vars.RunService.Heartbeat:Wait()
-+		if not stillCurrent() then return end
-+		if not model:IsDescendantOf(vars.Workspace) or not root.Parent then
-+			error("the entity was removed right after entering Workspace (this game purges unknown models)", 0)
-+		end
-+
-+		vars.localTryOnModel = model
-+		vars.localTryOnRootPart = root
-+		vars.localTryOnHiddenInFirstPerson = false
-+		vars.entityRuntime = runtime
-+		vars.hideCharacterLocally(character)
-+		vars.setLocalTryOnConnection("position", vars.RunService.RenderStepped, vars.entityStep)
-+		vars.destroyOrphanedLocalTryOnModels(model)
-+
-+		local slotNames = {}
-+		for _, slotName in ipairs({"idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"}) do
-+			if runtime.slots[slotName] then slotNames[#slotNames + 1] = slotName end
-+		end
-+		vars.Status.Text = string.format("[OK] Entity worn: %s (scale %.2f%s, root: %s, %d glued, anim slots: %s)",
-+			tostring(data.DisplayName), scale, scaleNote, rootHow, glued, #slotNames > 0 and table.concat(slotNames, ",") or "none")
-+	end, debug.traceback)
-+
-+	if not stillCurrent() then
-+		if model and not vars.localTryOnModel then pcall(function() model:Destroy() end) end
-+		return
-+	end
-+	vars.localTryOnBuilding = false
-+	if not ok then
-+		if model then pcall(function() model:Destroy() end) end
-+		vars.stopLocalTryOn(false)
-+		vars.showDiagnostics("Entity wear failed.", tostring(err))
-+	end
-+	vars.updateWearButtonState()
-+end
-+
-+local originalStopLocalTryOn = vars.stopLocalTryOn
-+vars.stopLocalTryOn = function(preserveActiveState)
-+	vars.entityStopRuntime()
-+	return originalStopLocalTryOn(preserveActiveState)
-+end
-+
-+-- ---------------------------------------------------------------- list entries + persistence
-+
-+vars.makeEntityEntry = function(path, displayName, options)
-+	local leaf = vars.getEntityLeafName(path)
-+	return {
-+		Kind = "Entity",
-+		Source = "entity",
-+		Name = leaf,
-+		DisplayName = (displayName and displayName ~= "") and displayName or ("[Entity] " .. leaf),
-+		Path = path,
-+		Options = vars.normalizeEntityOptions(options),
-+		Properties = {},
-+		RigType = "Entity",
-+		Signature = "entity:" .. string.lower(path),
-+		Entity = nil,
-+	}
-+end
-+
-+vars.loadEntityFile = function()
-+	vars.entityEntries = {}
-+	if type(readfile) ~= "function" or type(isfile) ~= "function" then return end
-+	local okExists, exists = pcall(isfile, vars.ENTITY_FILE_PATH)
-+	if not okExists or not exists then return end
-+	local ok, decoded = pcall(function() return vars.HttpService:JSONDecode(readfile(vars.ENTITY_FILE_PATH)) end)
-+	if not ok or type(decoded) ~= "table" then return end
-+	local list = decoded[tostring(game.PlaceId)]
-+	if type(list) ~= "table" then return end
-+	for _, saved in ipairs(list) do
-+		if type(saved) == "table" and type(saved.Path) == "string" and saved.Path ~= "" then
-+			vars.entityEntries[#vars.entityEntries + 1] = vars.makeEntityEntry(saved.Path, saved.DisplayName, saved.Options)
-+		end
-+	end
-+end
-+
-+vars.saveEntityFile = function()
-+	if type(writefile) ~= "function" then return false end
-+	pcall(function()
-+		if type(makefolder) == "function" and (type(isfolder) ~= "function" or not isfolder(vars.FOLDER_NAME)) then
-+			makefolder(vars.FOLDER_NAME)
-+		end
-+	end)
-+	local root = {}
-+	pcall(function()
-+		if type(isfile) == "function" and isfile(vars.ENTITY_FILE_PATH) then
-+			local decoded = vars.HttpService:JSONDecode(readfile(vars.ENTITY_FILE_PATH))
-+			if type(decoded) == "table" then root = decoded end
-+		end
-+	end)
-+	local list = {}
-+	for _, entry in ipairs(vars.entityEntries) do
-+		list[#list + 1] = {Path = entry.Path, DisplayName = entry.DisplayName, Options = entry.Options}
-+	end
-+	root[tostring(game.PlaceId)] = list
-+	return (pcall(function() writefile(vars.ENTITY_FILE_PATH, vars.HttpService:JSONEncode(root)) end))
-+end
-+
-+vars.appendEntityAvatars = function()
-+	if not vars.entitiesLoaded then
-+		vars.entitiesLoaded = true
-+		vars.loadEntityFile()
-+	end
-+	for _, entry in ipairs(vars.entityEntries) do
-+		vars.ui.savedAvatars[#vars.ui.savedAvatars + 1] = entry
-+	end
-+end
-+
-+vars.findEntityEntry = function(path)
-+	local signature = "entity:" .. string.lower(path)
-+	for _, entry in ipairs(vars.entityEntries) do
-+		if entry.Signature == signature then return entry end
-+	end
-+	return nil
-+end
-+
-+vars.deleteEntityAvatar = function(data)
-+	if vars.ui.selectedAvatar == data then
-+		vars.tryOnActive = false
-+		vars.stopLocalTryOn(false)
-+		vars.ui.selectedAvatar = nil
-+	end
-+	for index = #vars.entityEntries, 1, -1 do
-+		if vars.entityEntries[index] == data then table.remove(vars.entityEntries, index) end
-+	end
-+	for index = #vars.ui.savedAvatars, 1, -1 do
-+		if vars.ui.savedAvatars[index] == data then table.remove(vars.ui.savedAvatars, index) end
-+	end
-+	if data.Entity and data.Entity.Template then pcall(function() data.Entity.Template:Destroy() end) end
-+	data.Entity = nil
-+	vars.clearPreviewModelCache()
-+	vars.saveEntityFile()
-+	vars.Status.Text = "[OK] Removed entity: " .. tostring(data.DisplayName)
-+	vars.clearDiagnostics()
-+	vars.populateAvatarList()
-+end
-+
-+vars.entityCleanup = function()
-+	vars.entityStopRuntime()
-+	for _, entry in ipairs(vars.entityEntries) do
-+		if entry.Entity and entry.Entity.Template then pcall(function() entry.Entity.Template:Destroy() end) end
-+		entry.Entity = nil
-+	end
-+end
-+
-+-- ---------------------------------------------------------------- panel UI
-+
-+vars.formatEntityReport = function(entry)
-+	local info = entry.Entity
-+	if not info then
-+		return "Not captured yet. It is captured on first wear, or press ADD / UPDATE while the entity is loaded."
-+	end
-+	local lines = {}
-+	lines[#lines + 1] = tostring(entry.Path)
-+	lines[#lines + 1] = string.format("%s, %d parts, %d accessories, humanoid: %s", info.SourceClass, info.PartCount, info.AccessoryCount, info.HasHumanoid and "yes" or "no")
-+	lines[#lines + 1] = "root: " .. info.RootName .. " (" .. info.RootHow .. ")"
-+	if info.Bounds then
-+		lines[#lines + 1] = string.format("native size (visible): %.1f x %.1f x %.1f studs, height %.1f", info.Bounds.size.X, info.Bounds.size.Y, info.Bounds.size.Z, info.Bounds.size.Y)
-+	end
-+	local slots, slotWarnings = vars.buildEntitySlots(info.Animations, entry.Options.animMap)
-+	local names = {}
-+	for _, slotName in ipairs({"idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"}) do
-+		if slots[slotName] then names[#names + 1] = slotName end
-+	end
-+	local instanceCount, sampledCount = 0, 0
-+	for _, anim in ipairs(info.Animations) do
-+		if anim.Source == "sampled" then sampledCount += 1 else instanceCount += 1 end
-+	end
-+	lines[#lines + 1] = string.format("animations: %d in model, %d seen playing%s", instanceCount, sampledCount, info.SampleDone and "" or " (still watching...)")
-+	lines[#lines + 1] = "slots: " .. (#names > 0 and table.concat(names, ", ") or "none (entity stays in its default pose)")
-+	local unmapped = {}
-+	for _, anim in ipairs(info.Animations) do
-+		if not vars.classifyEntityAnimation(anim.Name, anim.Group) then unmapped[#unmapped + 1] = anim.Name .. "=" .. anim.Id end
-+	end
-+	if #unmapped > 0 then lines[#lines + 1] = "unmapped (use the anim map box): " .. table.concat(unmapped, " | ") end
-+	lines[#lines + 1] = string.format("removed: %d scripts, %d outside joints, %d outside constraints", info.Removed.Scripts, info.Removed.Joints, info.Removed.Constraints)
-+	for _, warning in ipairs(info.Warnings) do lines[#lines + 1] = "! " .. warning end
-+	for _, warning in ipairs(slotWarnings) do lines[#lines + 1] = "! anim map: " .. warning end
-+	return table.concat(lines, "\n")
-+end
-+
-+vars.buildEntityPanel = function()
-+	local Z = 31
-+	local panelState = {alignGround = true, recenter = true, sounds = false}
-+
-+	local panel = Instance.new("Frame")
-+	panel.Name = "EntityPanel"
-+	panel.Size = UDim2.new(1, -24, 1, -56)
-+	panel.Position = UDim2.new(0, 12, 0, 50)
-+	panel.BackgroundColor3 = vars.COLORS.Background
-+	panel.BorderSizePixel = 0
-+	panel.Visible = false
-+	panel.ZIndex = Z
-+	panel.Parent = vars.Main
-+	vars.EntityPanel = panel
-+
-+	local function styleBox(box, placeholder, size, position)
-+		box.Size = size
-+		box.Position = position
-+		box.BackgroundColor3 = vars.COLORS.Surface3
-+		box.BorderSizePixel = 0
-+		box.Text = ""
-+		box.PlaceholderText = placeholder
-+		box.PlaceholderColor3 = vars.COLORS.Muted
-+		box.TextColor3 = vars.COLORS.Text
-+		box.TextSize = 12
-+		box.FontFace = vars.uiFont(Enum.FontWeight.Medium)
-+		box.ClearTextOnFocus = false
-+		box.TextXAlignment = Enum.TextXAlignment.Left
-+		box.ZIndex = Z + 1
-+		box.Parent = panel
-+		vars.addPadding(box, 4)
-+		vars.addCorner(box, 6)
-+		vars.addStroke(box, vars.COLORS.Border, 1, 0.15)
-+		return box
-+	end
-+
-+	local pathBox = styleBox(Instance.new("TextBox"), "workspace.Monsters.Mimic", UDim2.new(1, -96, 0, 28), UDim2.new(0, 0, 0, 0))
-+	local addButton = vars.createButton(panel, "EntityAdd", "ADD / UPDATE", vars.COLORS.Surface3, Color3.fromRGB(52, 52, 55))
-+	addButton.Size = UDim2.new(0, 90, 0, 28)
-+	addButton.Position = UDim2.new(1, -90, 0, 0)
-+	addButton.TextSize = 11
-+	addButton.ZIndex = Z + 1
-+
-+	local scaleBox = styleBox(Instance.new("TextBox"), "scale: native|fit|2.5", UDim2.new(0.31, -3, 0, 26), UDim2.new(0, 0, 0, 34))
-+	local yawBox = styleBox(Instance.new("TextBox"), "yaw deg", UDim2.new(0.23, -3, 0, 26), UDim2.new(0.31, 0, 0, 34))
-+	local yBox = styleBox(Instance.new("TextBox"), "y offset", UDim2.new(0.23, -3, 0, 26), UDim2.new(0.54, 0, 0, 34))
-+	local runBox = styleBox(Instance.new("TextBox"), "run speed", UDim2.new(0.23, 0, 0, 26), UDim2.new(0.77, 0, 0, 34))
-+
-+	local function makeToggle(label, key, x)
-+		local button = vars.createButton(panel, "Toggle_" .. key, "", vars.COLORS.Surface3, Color3.fromRGB(52, 52, 55))
-+		button.Size = UDim2.new(1 / 3, -4, 0, 26)
-+		button.Position = UDim2.new(x, 0, 0, 66)
-+		button.TextSize = 11
-+		button.ZIndex = Z + 1
-+		local function refresh() button.Text = label .. ": " .. (panelState[key] and "ON" or "OFF") end
-+		refresh()
-+		vars.wire(button.Activated, function()
-+			panelState[key] = not panelState[key]
-+			refresh()
-+		end)
-+		return button, refresh
-+	end
-+	local _, refreshGround = makeToggle("GROUND ALIGN", "alignGround", 0)
-+	local _, refreshCenter = makeToggle("RECENTER", "recenter", 1 / 3)
-+	local _, refreshSounds = makeToggle("SOUNDS", "sounds", 2 / 3)
-+
-+	local mapBox = styleBox(Instance.new("TextBox"), "anim map (optional): idle=Name; run=rbxassetid://123", UDim2.new(1, 0, 0, 26), UDim2.new(0, 0, 0, 98))
-+
-+	local reportScroll = Instance.new("ScrollingFrame")
-+	reportScroll.Size = UDim2.new(1, 0, 1, -132)
-+	reportScroll.Position = UDim2.new(0, 0, 0, 130)
-+	reportScroll.BackgroundColor3 = vars.COLORS.Surface
-+	reportScroll.BorderSizePixel = 0
-+	reportScroll.ScrollBarThickness = 3
-+	reportScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-+	reportScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-+	reportScroll.ZIndex = Z + 1
-+	reportScroll.Parent = panel
-+	vars.addCorner(reportScroll, 6)
-+	vars.addStroke(reportScroll, vars.COLORS.Border, 1, 0.15)
-+
-+	local reportLabel = Instance.new("TextLabel")
-+	reportLabel.Size = UDim2.new(1, -8, 0, 0)
-+	reportLabel.AutomaticSize = Enum.AutomaticSize.Y
-+	reportLabel.BackgroundTransparency = 1
-+	reportLabel.Text = "Paste a path to a Model, then ADD / UPDATE. Entries appear in the avatar list; click one to wear it.\nWear is local only: other players do not see it."
-+	reportLabel.TextColor3 = vars.COLORS.Muted
-+	reportLabel.TextSize = 11
-+	reportLabel.Font = Enum.Font.Code
-+	reportLabel.TextWrapped = true
-+	reportLabel.TextXAlignment = Enum.TextXAlignment.Left
-+	reportLabel.TextYAlignment = Enum.TextYAlignment.Top
-+	reportLabel.ZIndex = Z + 2
-+	reportLabel.Parent = reportScroll
-+	vars.addPadding(reportLabel, 5)
-+
-+	vars.setEntityReport = function(text)
-+		if reportLabel.Parent then reportLabel.Text = tostring(text) end
-+	end
-+
-+	local function readOptions()
-+		return vars.normalizeEntityOptions({
-+			scale = scaleBox.Text,
-+			yaw = yawBox.Text,
-+			yOffset = yBox.Text,
-+			runSpeed = runBox.Text ~= "" and runBox.Text or nil,
-+			alignGround = panelState.alignGround,
-+			recenter = panelState.recenter,
-+			sounds = panelState.sounds,
-+			animMap = mapBox.Text,
-+		})
-+	end
-+
-+	local function loadOptionsIntoBoxes(options)
-+		scaleBox.Text = options.scale == "native" and "" or options.scale
-+		yawBox.Text = options.yaw ~= 0 and tostring(options.yaw) or ""
-+		yBox.Text = options.yOffset ~= 0 and tostring(options.yOffset) or ""
-+		runBox.Text = options.runSpeed ~= vars.ENTITY_DEFAULT_OPTIONS.runSpeed and tostring(options.runSpeed) or ""
-+		mapBox.Text = options.animMap
-+		panelState.alignGround, panelState.recenter, panelState.sounds = options.alignGround, options.recenter, options.sounds
-+		refreshGround()
-+		refreshCenter()
-+		refreshSounds()
-+	end
-+
-+	vars.wire(pathBox.FocusLost, function()
-+		local path = vars.entityTrim(pathBox.Text)
-+		if path == "" then return end
-+		local entry = vars.findEntityEntry(path)
-+		if entry then
-+			loadOptionsIntoBoxes(entry.Options)
-+			vars.entityPanelEntry = entry
-+			vars.setEntityReport(vars.formatEntityReport(entry))
-+		end
-+	end)
-+
-+	local busy = false
-+	vars.wire(addButton.Activated, function()
-+		if busy then return end
-+		local path = vars.entityTrim(pathBox.Text)
-+		if path == "" then
-+			vars.setEntityReport("Type a path first, e.g. workspace.Monsters.Mimic")
-+			return
-+		end
-+		busy = true
-+		addButton.Text = "WORKING..."
-+		vars.setEntityReport("Resolving " .. path .. " ...")
-+		task.spawn(function()
-+			local options = readOptions()
-+			local info, captureError = vars.captureEntity(path, options)
-+			if not vars.scriptAlive then return end
-+			busy = false
-+			addButton.Text = "ADD / UPDATE"
-+			if not info then
-+				vars.setEntityReport("FAILED: " .. tostring(captureError))
-+				return
-+			end
-+			local entry = vars.findEntityEntry(path)
-+			if entry then
-+				if entry.Entity and entry.Entity.Template then pcall(function() entry.Entity.Template:Destroy() end) end
-+				entry.Options = options
-+			else
-+				entry = vars.makeEntityEntry(path, nil, options)
-+				vars.entityEntries[#vars.entityEntries + 1] = entry
-+				vars.ui.savedAvatars[#vars.ui.savedAvatars + 1] = entry
-+			end
-+			entry.Entity = info
-+			info.OnAnimationsChanged = function()
-+				if vars.entityPanelEntry == entry then vars.setEntityReport(vars.formatEntityReport(entry)) end
-+			end
-+			vars.entityPanelEntry = entry
-+			vars.clearPreviewModelCache()
-+			vars.saveEntityFile()
-+			vars.populateAvatarList()
-+			vars.setEntityReport(vars.formatEntityReport(entry))
-+			vars.Status.Text = "[OK] Entity captured: " .. tostring(entry.DisplayName)
-+		end)
-+	end)
-+
-+	local toggle = vars.createButton(vars.TitleBar, "EntityButton", "ENT", vars.COLORS.Surface3, Color3.fromRGB(52, 52, 55))
-+	toggle.Size = UDim2.new(0, 30, 0, 28)
-+	toggle.Position = UDim2.new(1, -138, 0, 8)
-+	toggle.TextSize = 10
-+	toggle.ZIndex = 13
-+	vars.EntityButton = toggle
-+	vars.wire(toggle.Activated, function()
-+		if vars.minimized then return end
-+		panel.Visible = not panel.Visible
-+		toggle.TextColor3 = panel.Visible and vars.COLORS.Text or vars.COLORS.Muted
-+	end)
-+	toggle.TextColor3 = vars.COLORS.Muted
-+	vars.wire(vars.MinimizeButton.Activated, function()
-+		if vars.minimized then panel.Visible = false end
-+	end)
-+end
-+
-+vars.buildEntityPanel()
-+
- if vars.LocalPlayer.Character then vars.bindCharacterLifecycle(vars.LocalPlayer.Character) end
- 
- vars.loadSavedAvatars()
