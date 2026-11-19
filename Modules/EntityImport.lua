@@ -420,6 +420,13 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 if enabled and p0 and p1 and parent[p0] and parent[p1] then
                     union(p0, p1)
                 end
+            elseif object:IsA("Constraint") then
+                local a0, a1 = object.Attachment0, object.Attachment1
+                local p0 = a0 and a0.Parent
+                local p1 = a1 and a1.Parent
+                if p0 and p1 and parent[p0] and parent[p1] then
+                    union(p0, p1)
+                end
             end
         end
 
@@ -935,6 +942,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     end
 
     loadConfig()
+
+    SkinSection:Divider()
 
     local pathInput = SkinSection:Input({
         Name = "Entity Model Path",
