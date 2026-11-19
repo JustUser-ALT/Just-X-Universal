@@ -8,16 +8,17 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local HttpService = game:GetService("HttpService")
+    local AssetService = game:GetService("AssetService")
     local Workspace = game:GetService("Workspace")
     local LocalPlayer = Players.LocalPlayer
 
     local CONFIG_FILE = "JustXUniversal_Entities.json"
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
-    local VISUAL_LIFT = 15
-    local DISABLE_ENTITY_ANIMATIONS = true -- Temporary diagnostic: test restored rig without imported animation tracks
-    local RESET_SKELETON_TRANSFORMS = true -- Temporary diagnostic: restore neutral Bone/Motor6D pose
-    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-09"
+    local VISUAL_LIFT = 0
+    local DISABLE_ENTITY_ANIMATIONS = false
+    local DIAGNOSTIC_BUILD = "ENTITY-PORTABLE-MESH-01"
+    local editableMeshReferences = {}
     local diagnosticLabel
     local diagnostic = {
         State = "Waiting for entity",
@@ -734,6 +735,168 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         return result
     end
 
+    -- EditableMesh portable geometry. This stores actual vertices/faces/attributes/skin weights,
+    -- so MeshPart restoration never depends on the source game's MeshId being available.
+    local function exportEditableMesh(part)
+        local editableMesh = AssetService:CreateEditableMeshAsync(part.MeshContent)
+        if not editableMesh then error("CreateEditableMeshAsync returned nil for " .. part.Name) end
+
+        local data = {vertices = {}, faces = {}, normals = {}, uvs = {}, colors = {}, bones = {},
+            skin = {offsets = {}, boneIndices = {}, weights = {}}}
+        local ok, result = pcall(function()
+            local vertexIds = editableMesh:GetVertices()
+            local vertexMap = {}
+            for index, vertexId in ipairs(vertexIds) do
+                vertexMap[vertexId] = index
+                local value = editableMesh:GetPosition(vertexId)
+                data.vertices[index] = {value.X, value.Y, value.Z}
+                if index % 500 == 0 then task.wait() end
+            end
+
+            local boneIds = editableMesh:GetBones()
+            local boneMap = {}
+            for index, boneId in ipairs(boneIds) do boneMap[boneId] = index end
+            for index, boneId in ipairs(boneIds) do
+                local parentId = editableMesh:GetBoneParent(boneId)
+                data.bones[index] = {name = editableMesh:GetBoneName(boneId),
+                    cframe = {editableMesh:GetBoneCFrame(boneId):GetComponents()},
+                    virtual = editableMesh:GetBoneIsVirtual(boneId), parent = boneMap[parentId] or 0}
+            end
+
+            local normalMap, uvMap, colorMap = {}, {}, {}
+            local function saveAttribute(map, output, id, getter, color)
+                if map[id] then return map[id] end
+                local value = getter(editableMesh, id)
+                if not value then error("Could not read EditableMesh attribute " .. tostring(id)) end
+                local index = #output + 1
+                map[id] = index
+                if color then
+                    output[index] = {value.R, value.G, value.B, editableMesh:GetColorAlpha(id) or 1}
+                elseif typeof(value) == "Vector2" then
+                    output[index] = {value.X, value.Y}
+                else
+                    output[index] = {value.X, value.Y, value.Z}
+                end
+                return index
+            end
+
+            for faceIndex, faceId in ipairs(editableMesh:GetFaces()) do
+                local sourceVertices = editableMesh:GetFaceVertices(faceId)
+                local sourceNormals = editableMesh:GetFaceNormals(faceId)
+                local sourceUVs = editableMesh:GetFaceUVs(faceId)
+                local sourceColors = editableMesh:GetFaceColors(faceId)
+                local face = {vertices = {}, normals = {}, uvs = {}, colors = {}}
+                for corner, vertexId in ipairs(sourceVertices) do
+                    local mapped = vertexMap[vertexId]
+                    if not mapped then error("Face references unknown vertex") end
+                    face.vertices[corner] = mapped
+                    if sourceNormals[corner] then
+                        face.normals[corner] = saveAttribute(normalMap, data.normals, sourceNormals[corner], AssetService.GetEditableMesh and function(mesh,id) return mesh:GetNormal(id) end or function(mesh,id) return mesh:GetNormal(id) end, false)
+                    end
+                    if sourceUVs[corner] then
+                        face.uvs[corner] = saveAttribute(uvMap, data.uvs, sourceUVs[corner], function(mesh,id) return mesh:GetUV(id) end, false)
+                    end
+                    if sourceColors[corner] then
+                        face.colors[corner] = saveAttribute(colorMap, data.colors, sourceColors[corner], function(mesh,id) return mesh:GetColor(id) end, true)
+                    end
+                end
+                data.faces[faceIndex] = face
+                if faceIndex % 500 == 0 then task.wait() end
+            end
+
+            for vertexIndex, vertexId in ipairs(vertexIds) do
+                local sourceBones = editableMesh:GetVertexBones(vertexId)
+                local sourceWeights = editableMesh:GetVertexBoneWeights(vertexId)
+                local startIndex = #data.skin.boneIndices + 1
+                local count = 0
+                for influenceIndex, boneId in ipairs(sourceBones) do
+                    local mappedBone = boneMap[boneId]
+                    local weight = sourceWeights[influenceIndex]
+                    if mappedBone and type(weight) == "number" then
+                        data.skin.boneIndices[#data.skin.boneIndices + 1] = mappedBone
+                        data.skin.weights[#data.skin.weights + 1] = weight
+                        count += 1
+                    end
+                end
+                data.skin.offsets[vertexIndex] = {startIndex, count}
+                if vertexIndex % 500 == 0 then task.wait() end
+            end
+        end)
+        pcall(function() editableMesh:Destroy() end)
+        if not ok then error("EditableMesh export failed for " .. part.Name .. ": " .. tostring(result)) end
+        return data
+    end
+
+    local function restoreEditableMesh(data)
+        if type(data) ~= "table" or type(data.vertices) ~= "table" or type(data.faces) ~= "table" then
+            error("Portable EditableMesh data is missing or damaged")
+        end
+        local editableMesh = AssetService:CreateEditableMesh()
+        if not editableMesh then error("CreateEditableMesh returned nil") end
+        local ok, result = pcall(function()
+            local vertexMap = {}
+            for index, value in ipairs(data.vertices) do
+                vertexMap[index] = editableMesh:AddVertex(Vector3.new(value[1], value[2], value[3]))
+                if index % 500 == 0 then task.wait() end
+            end
+            local boneMap = {}
+            for index, bone in ipairs(data.bones or {}) do
+                boneMap[index] = editableMesh:AddBone({Name = bone.name, CFrame = CFrame.new(table.unpack(bone.cframe)), Virtual = bone.virtual == true})
+                if index % 500 == 0 then task.wait() end
+            end
+            for index, bone in ipairs(data.bones or {}) do
+                if bone.parent and bone.parent > 0 then
+                    local parentId = boneMap[bone.parent]
+                    if not parentId then error("Missing parent bone " .. tostring(bone.parent)) end
+                    editableMesh:SetBoneParent(boneMap[index], parentId)
+                end
+            end
+            local normalMap, uvMap, colorMap = {}, {}, {}
+            for index, value in ipairs(data.normals or {}) do normalMap[index] = editableMesh:AddNormal(Vector3.new(value[1], value[2], value[3])) end
+            for index, value in ipairs(data.uvs or {}) do uvMap[index] = editableMesh:AddUV(Vector2.new(value[1], value[2])) end
+            for index, value in ipairs(data.colors or {}) do colorMap[index] = editableMesh:AddColor(Color3.new(value[1], value[2], value[3]), value[4] or 1) end
+            for faceIndex, face in ipairs(data.faces) do
+                local vertices, normals, uvs, colors = {}, {}, {}, {}
+                for corner, vertexIndex in ipairs(face.vertices) do
+                    vertices[corner] = vertexMap[vertexIndex]
+                    if not vertices[corner] then error("Invalid face vertex index") end
+                    if face.normals and face.normals[corner] then normals[corner] = normalMap[face.normals[corner]] end
+                    if face.uvs and face.uvs[corner] then uvs[corner] = uvMap[face.uvs[corner]] end
+                    if face.colors and face.colors[corner] then colors[corner] = colorMap[face.colors[corner]] end
+                end
+                if #vertices ~= 3 and #vertices ~= 4 then error("Unsupported face corner count: " .. #vertices) end
+                local faceId = editableMesh:AddFace(table.unpack(vertices))
+                if #normals == #vertices then editableMesh:SetFaceNormals(faceId, normals) end
+                if #uvs == #vertices then editableMesh:SetFaceUVs(faceId, uvs) end
+                if #colors == #vertices then editableMesh:SetFaceColors(faceId, colors) end
+                if faceIndex % 500 == 0 then task.wait() end
+            end
+            local skin = data.skin or {}
+            for vertexIndex, offset in ipairs(skin.offsets or {}) do
+                local startIndex, count = offset[1], offset[2]
+                if count and count > 0 then
+                    local boneIds, weights = {}, {}
+                    for influence = 0, count - 1 do
+                        local arrayIndex = startIndex + influence
+                        local boneIndex = skin.boneIndices[arrayIndex]
+                        local boneId = boneMap[boneIndex]
+                        if not boneId then error("Invalid skin bone index: " .. tostring(boneIndex)) end
+                        boneIds[#boneIds + 1] = boneId
+                        weights[#weights + 1] = skin.weights[arrayIndex]
+                    end
+                    editableMesh:SetVertexBones(vertexMap[vertexIndex], boneIds)
+                    editableMesh:SetVertexBoneWeights(vertexMap[vertexIndex], weights)
+                end
+                if vertexIndex % 500 == 0 then task.wait() end
+            end
+        end)
+        if not ok then
+            pcall(function() editableMesh:Destroy() end)
+            error("EditableMesh reconstruction failed: " .. tostring(result))
+        end
+        return editableMesh
+    end
+
     local function serializeModel(model, animations)
         local root = pickRoot(model)
         if not root then return nil, "No root part found for portable save" end
@@ -781,6 +944,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         pcall(function() props.RenderFidelity = enumName(object.RenderFidelity) end)
                         pcall(function() props.CollisionFidelity = enumName(object.CollisionFidelity) end)
                         pcall(function() props.DoubleSided = object.DoubleSided end)
+                        props.PortableMesh = exportEditableMesh(object)
                         meshRecord.MeshId = props.MeshId or ""
                         meshRecord.TextureID = props.TextureID or ""
                         meshRecord.Size = props.Size
@@ -827,6 +991,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     pcall(function() props.MetalnessMap = object.MetalnessMap end)
                     pcall(function() props.NormalMap = object.NormalMap end)
                     pcall(function() props.RoughnessMap = object.RoughnessMap end)
+                    pcall(function() props.AlphaMode = enumName(object.AlphaMode) end)
                 elseif object:IsA("BodyColors") then
                     props.HeadColor = packColor3(object.HeadColor3)
                     props.TorsoColor = packColor3(object.TorsoColor3)
@@ -925,6 +1090,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 or className == "SpawnLocation" or className == "Seat"
                 or className == "VehicleSeat"
             local createClass = className
+            if className == "MeshPart" then createClass = "Part" end
             local okCreate, object = pcall(function() return Instance.new(createClass) end)
             if not okCreate or not object then
                 if isPart then
@@ -1074,7 +1240,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             elseif object:IsA("Bone") then
                 local cframeOk = pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
                 -- Diagnostic: discard the captured pose and restore the neutral bone transform.
-                local transformOk = pcall(function() object.Transform = CFrame.identity end)
+                local transformOk = pcall(function() object.Transform = cframeFrom(props.Transform) end)
                 pcall(function() object.Axis = vectorFrom(props.Axis) end)
                 pcall(function() object.SecondaryAxis = vectorFrom(props.SecondaryAxis) end)
                 local cfDelta = cframeFrom(props.CFrame):ToObjectSpace(object.CFrame)
@@ -1114,6 +1280,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 pcall(function() object.MetalnessMap = props.MetalnessMap or "" end)
                 pcall(function() object.NormalMap = props.NormalMap or "" end)
                 pcall(function() object.RoughnessMap = props.RoughnessMap or "" end)
+                if props.AlphaMode then
+                    pcall(function() object.AlphaMode = Enum.AlphaMode[props.AlphaMode] end)
+                end
             elseif object:IsA("BodyColors") then
                 pcall(function() object.HeadColor3 = colorFrom(props.HeadColor) end)
                 pcall(function() object.TorsoColor3 = colorFrom(props.TorsoColor) end)
@@ -1139,6 +1308,52 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             end
         end
 
+        -- Replace temporary MeshPart placeholders with MeshParts built from the saved EditableMesh.
+        -- Children (Bones, SurfaceAppearance, attachments) and hierarchy indices are retained.
+        for index, node in ipairs(data.Nodes) do
+            if node.Class == "MeshPart" then
+                local placeholder = objects[index]
+                local props = node.Props or {}
+                if type(props.PortableMesh) ~= "table" then
+                    error("MeshPart '" .. tostring(node.Name) .. "' has no portable EditableMesh payload; re-import this entity")
+                end
+                local editableMesh = restoreEditableMesh(props.PortableMesh)
+                local meshPartOk, meshPartOrError = pcall(function()
+                    return AssetService:CreateMeshPartAsync(Content.fromObject(editableMesh), {
+                        CollisionFidelity = Enum.CollisionFidelity.Box,
+                        RenderFidelity = Enum.RenderFidelity.Precise
+                    })
+                end)
+                if not meshPartOk or not meshPartOrError then
+                    pcall(function() editableMesh:Destroy() end)
+                    error("CreateMeshPartAsync failed for " .. tostring(node.Name) .. ": " .. tostring(meshPartOrError))
+                end
+                local meshPart = meshPartOrError
+                meshPart.Name = placeholder.Name
+                meshPart.Size = placeholder.Size
+                meshPart.CFrame = placeholder.CFrame
+                meshPart.Color = placeholder.Color
+                meshPart.Transparency = placeholder.Transparency
+                meshPart.Reflectance = placeholder.Reflectance
+                meshPart.Anchored = true
+                meshPart.CanCollide = placeholder.CanCollide
+                meshPart.CanTouch = placeholder.CanTouch
+                meshPart.CanQuery = placeholder.CanQuery
+                meshPart.Massless = placeholder.Massless
+                meshPart.CastShadow = placeholder.CastShadow
+                pcall(function() meshPart.DoubleSided = props.DoubleSided == true end)
+                pcall(function() meshPart.Material = Enum.Material[props.Material] end)
+                pcall(function() meshPart.RenderFidelity = Enum.RenderFidelity[props.RenderFidelity] end)
+                pcall(function() meshPart.CollisionFidelity = Enum.CollisionFidelity[props.CollisionFidelity] end)
+                local parent = placeholder.Parent
+                meshPart.Parent = parent
+                for _, child in ipairs(placeholder:GetChildren()) do child.Parent = meshPart end
+                objects[index] = meshPart
+                placeholder:Destroy()
+                editableMeshReferences[#editableMeshReferences + 1] = editableMesh
+            end
+        end
+
         for index, node in ipairs(data.Nodes) do
             local object = objects[index]
             local props = node.Props or {}
@@ -1151,7 +1366,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     if props.Enabled ~= nil then object.Enabled = props.Enabled end
                     if object:IsA("Motor6D") then
                         -- Diagnostic: discard the captured pose and restore a neutral joint transform.
-                        object.Transform = CFrame.identity
+                        object.Transform = cframeFrom(props.Transform)
                         local c0Delta = cframeFrom(props.C0):ToObjectSpace(object.C0)
                         local c1Delta = cframeFrom(props.C1):ToObjectSpace(object.C1)
                         local trDelta = cframeFrom(props.Transform):ToObjectSpace(object.Transform)
@@ -1732,12 +1947,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         notify("Entity Import", restoreError, "Error")
                         return false
                     end
-                    diagnostic.Compare = formatModelComparison(entry.Data.SourceStats, measureModel(restoredModel))
-                    diagnostic.MeshCompare = formatMeshRestoreReport(meshRestoreRecords)
-                    diagnostic.SkeletonCompare = formatSkeletonRestoreReport(skeletonRestoreRecords)
-                    diagnostic.GeometryCompare = geometryRestoreReport or "Geometry report unavailable"
-                    diagnostic.State = "Portable model reconstructed; comparing source"
-                    refreshDiagnostic(true)
+                    pcall(print, "[ENTITY-PORTABLE] Reconstructed portable model | mesh records: " .. tostring(#(meshRestoreRecords or {})) .. " | skeleton records: " .. tostring(#(skeletonRestoreRecords or {})))
                     info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
                     restoredModel:Destroy()
                     if info and type(entry.Data.Animations) == "table" then
@@ -2022,7 +2232,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
         diagnostic.State = "Loaded; RenderStepped active"
         diagnostic.ModelParent = model.Parent and model.Parent:GetFullName() or "unparented"
-        emitConsoleDiagnostic()
+        pcall(print, "[ENTITY-PORTABLE] Preview active: " .. tostring(entry.Name) .. " | parts: " .. tostring(info.PartCount) .. " | animation slots: " .. tostring(#animationNames))
 
         local summary = string.format(
             "Loaded %s | %d parts | animations: %s",
