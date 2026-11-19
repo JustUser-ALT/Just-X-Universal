@@ -15,7 +15,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
     local VISUAL_LIFT = 15
-    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-04"
+    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-07"
     local diagnosticLabel
     local diagnostic = {
         State = "Waiting for entity",
@@ -79,6 +79,33 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             tostring(diagnostic.Compare) .. "\n\nMESH RESTORE CHECK\n" .. tostring(diagnostic.MeshCompare)
                 .. "\n\nSKELETON RESTORE CHECK\n" .. tostring(diagnostic.SkeletonCompare)
         ))
+    end
+
+    local function emitConsoleDiagnostic()
+        local lines = {
+            "========== " .. DIAGNOSTIC_BUILD .. " ==========",
+            "State: " .. tostring(diagnostic.State),
+            "Model: " .. tostring(diagnostic.ModelParent),
+            string.format("Position Y | Before: %s | Target: %s | Actual root: %s | Pivot: %s",
+                tostring(diagnostic.BeforeY or "-"),
+                tostring(diagnostic.TargetY or "-"),
+                tostring(diagnostic.ActualY or "-"),
+                tostring(diagnostic.PivotY or "-")),
+            "Previous-frame overwrite: " .. tostring(diagnostic.OverwriteDelta or "-"),
+            "VISUAL LIFT: " .. tostring(VISUAL_LIFT),
+            "",
+            "SOURCE -> RESTORED",
+            tostring(diagnostic.Compare),
+            "",
+            "MESH RESTORE CHECK",
+            tostring(diagnostic.MeshCompare),
+            "",
+            "SKELETON RESTORE CHECK",
+            tostring(diagnostic.SkeletonCompare),
+            "========== END " .. DIAGNOSTIC_BUILD .. " =========="
+        }
+        local output = "[ENTITY-DIAG] " .. table.concat(lines, "\n[ENTITY-DIAG] ")
+        pcall(print, output)
     end
 
     local function trim(value)
@@ -1844,7 +1871,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
         diagnostic.State = "Loaded; RenderStepped active"
         diagnostic.ModelParent = model.Parent and model.Parent:GetFullName() or "unparented"
-        refreshDiagnostic(true)
+        emitConsoleDiagnostic()
 
         local summary = string.format(
             "Loaded %s | %d parts | animations: %s",
@@ -1950,13 +1977,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     end
 
     loadConfig()
-
-    SkinSection:Divider({Label = "Entity Diagnostics"})
-    diagnosticLabel = SkinSection:Label({
-        Text = "Build: " .. DIAGNOSTIC_BUILD .. " | Lift: " .. tostring(VISUAL_LIFT) .. "\nState: Waiting for entity",
-        Color = Color3.fromRGB(190, 190, 190)
-    })
-    refreshDiagnostic(true)
 
     SkinSection:Divider({Label = "Entity Import"})
 
