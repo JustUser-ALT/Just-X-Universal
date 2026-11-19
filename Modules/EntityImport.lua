@@ -175,44 +175,59 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     end
 
     local function computeBounds(model, root, bodyRotation)
-        local minimum = Vector3.new(math.huge, math.huge, math.huge)
-        local maximum = Vector3.new(-math.huge, -math.huge, -math.huge)
-        local count = 0
+        local function newBounds()
+            return {
+                Min = Vector3.new(math.huge, math.huge, math.huge),
+                Max = Vector3.new(-math.huge, -math.huge, -math.huge),
+                Count = 0
+            }
+        end
+
+        local visible = newBounds()
+        local complete = newBounds()
+
+        local function addPoint(bounds, point)
+            bounds.Min = Vector3.new(
+                math.min(bounds.Min.X, point.X),
+                math.min(bounds.Min.Y, point.Y),
+                math.min(bounds.Min.Z, point.Z)
+            )
+            bounds.Max = Vector3.new(
+                math.max(bounds.Max.X, point.X),
+                math.max(bounds.Max.Y, point.Y),
+                math.max(bounds.Max.Z, point.Z)
+            )
+        end
 
         for _, part in ipairs(model:GetDescendants()) do
-            if part:IsA("BasePart") and part.Transparency < 0.98 then
+            if part:IsA("BasePart") then
                 local half = part.Size / 2
                 for _, x in ipairs({-1, 1}) do
                     for _, y in ipairs({-1, 1}) do
                         for _, z in ipairs({-1, 1}) do
                             local worldPoint = (part.CFrame * CFrame.new(x * half.X, y * half.Y, z * half.Z)).Position
                             local point = bodyRotation:VectorToWorldSpace(root.CFrame:PointToObjectSpace(worldPoint))
-                            minimum = Vector3.new(
-                                math.min(minimum.X, point.X),
-                                math.min(minimum.Y, point.Y),
-                                math.min(minimum.Z, point.Z)
-                            )
-                            maximum = Vector3.new(
-                                math.max(maximum.X, point.X),
-                                math.max(maximum.Y, point.Y),
-                                math.max(maximum.Z, point.Z)
-                            )
+                            addPoint(complete, point)
+                            if part.Transparency < 0.98 then
+                                addPoint(visible, point)
+                            end
                         end
                     end
                 end
-                count += 1
+                complete.Count += 1
+                if part.Transparency < 0.98 then visible.Count += 1 end
             end
         end
 
-        if count == 0 then return nil end
+        local used = visible.Count > 0 and visible or complete
+        if used.Count == 0 then return nil end
         return {
-            Min = minimum,
-            Max = maximum,
-            Size = maximum - minimum,
-            Center = (minimum + maximum) / 2
+            Min = used.Min,
+            Max = used.Max,
+            Size = used.Max - used.Min,
+            Center = (used.Min + used.Max) / 2
         }
     end
-
     local function classifyAnimation(name, group)
         local n = tostring(name or ""):lower():gsub("[^%w]", "")
         local g = tostring(group or ""):lower():gsub("[^%w]", "")
