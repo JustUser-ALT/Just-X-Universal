@@ -14,6 +14,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local CONFIG_FILE = "JustXUniversal_Entities.json"
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
+    local VISUAL_LIFT = 15
     local entries = {}
     local selectedEntry
     local active
@@ -1382,7 +1383,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local verticalOffset = currentRoot.Position.Y - initialPlayerRootY
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
-                floorY - bounds.Min.Y + verticalOffset,
+                floorY - bounds.Min.Y + verticalOffset + VISUAL_LIFT,
                 currentRoot.Position.Z - horizontal.Z
             )
             local targetRootCFrame = CFrame.new(position) * facing * bodyRotation
@@ -1439,7 +1440,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local verticalOffset = currentRoot.Position.Y - initialPlayerRootY
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
-                floorY - runtime.Bounds.Min.Y + verticalOffset,
+                floorY - runtime.Bounds.Min.Y + verticalOffset + VISUAL_LIFT,
                 currentRoot.Position.Z - horizontal.Z
             )
             local targetRootCFrame = CFrame.new(position) * facing * runtime.BodyRotation
