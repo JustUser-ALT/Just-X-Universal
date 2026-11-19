@@ -27,7 +27,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         PivotY = nil,
         ModelParent = "none",
         Compare = "No portable restore comparison yet",
-        MeshCompare = "No mesh restore comparison yet"
+        MeshCompare = "No mesh restore comparison yet",
+        SkeletonCompare = "No skeleton restore comparison yet"
     }
     local lastDiagnosticUpdate = 0
     local entries = {}
@@ -76,6 +77,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             fmt(diagnostic.OverwriteDelta),
             fmt(diagnostic.PivotY),
             tostring(diagnostic.Compare) .. "\n\nMESH RESTORE CHECK\n" .. tostring(diagnostic.MeshCompare)
+                .. "\n\nSKELETON RESTORE CHECK\n" .. tostring(diagnostic.SkeletonCompare)
         ))
     end
 
@@ -871,6 +873,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local objects = {}
         local fallbackMeshes = {}
         local meshRestoreRecords = {}
+        local skeletonRestoreRecords = {}
 
         for index, node in ipairs(data.Nodes) do
             local className = tostring(node.Class or "")
@@ -1027,10 +1030,20 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     }
                 end
             elseif object:IsA("Bone") then
-                pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
-                pcall(function() object.Transform = cframeFrom(props.Transform) end)
+                local cframeOk = pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
+                local transformOk = pcall(function() object.Transform = cframeFrom(props.Transform) end)
                 pcall(function() object.Axis = vectorFrom(props.Axis) end)
                 pcall(function() object.SecondaryAxis = vectorFrom(props.SecondaryAxis) end)
+                local cfDelta = cframeFrom(props.CFrame):ToObjectSpace(object.CFrame)
+                local trDelta = cframeFrom(props.Transform):ToObjectSpace(object.Transform)
+                local _, cfAngle = cfDelta:ToAxisAngle()
+                local _, trAngle = trDelta:ToAxisAngle()
+                skeletonRestoreRecords[#skeletonRestoreRecords + 1] = {
+                    Class = "Bone", Name = object.Name,
+                    CFramePositionDelta = cfDelta.Position.Magnitude, CFrameAngleDelta = math.deg(cfAngle),
+                    TransformPositionDelta = trDelta.Position.Magnitude, TransformAngleDelta = math.deg(trAngle),
+                    CFrameSet = cframeOk, TransformSet = transformOk
+                }
             elseif object:IsA("Attachment") then
                 pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
                 pcall(function() object.Axis = vectorFrom(props.Axis) end)
@@ -1095,6 +1108,18 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     if props.Enabled ~= nil then object.Enabled = props.Enabled end
                     if object:IsA("Motor6D") and props.Transform then
                         object.Transform = cframeFrom(props.Transform)
+                        local c0Delta = cframeFrom(props.C0):ToObjectSpace(object.C0)
+                        local c1Delta = cframeFrom(props.C1):ToObjectSpace(object.C1)
+                        local trDelta = cframeFrom(props.Transform):ToObjectSpace(object.Transform)
+                        local _, c0Angle = c0Delta:ToAxisAngle()
+                        local _, c1Angle = c1Delta:ToAxisAngle()
+                        local _, trAngle = trDelta:ToAxisAngle()
+                        skeletonRestoreRecords[#skeletonRestoreRecords + 1] = {
+                            Class = "Motor6D", Name = object.Name,
+                            C0PositionDelta = c0Delta.Position.Magnitude, C0AngleDelta = math.deg(c0Angle),
+                            C1PositionDelta = c1Delta.Position.Magnitude, C1AngleDelta = math.deg(c1Angle),
+                            TransformPositionDelta = trDelta.Position.Magnitude, TransformAngleDelta = math.deg(trAngle)
+                        }
                     end
                 end)
             elseif object:IsA("WeldConstraint") then
@@ -1138,7 +1163,21 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         if primary and primary:IsA("BasePart") then
             pcall(function() model.PrimaryPart = primary end)
         end
-        return model, nil, meshRestoreRecords
+        return model, nil, meshRestoreRecords, skeletonRestoreRecords
+    end
+
+    local function formatSkeletonRestoreReport(records)
+        if type(records) ~= "table" or #records == 0 then return "No Bone/Motor6D restore records" end
+        local lines = {}
+        for index, item in ipairs(records) do
+            if index > 18 then lines[#lines + 1] = string.format("... +%d more", #records - 18) break end
+            if item.Class == "Bone" then
+                lines[#lines + 1] = string.format("%02d Bone %s | CFrame delta %.4f/%.3f deg | Transform delta %.4f/%.3f deg | Set:%s/%s", index, tostring(item.Name), item.CFramePositionDelta or 0, item.CFrameAngleDelta or 0, item.TransformPositionDelta or 0, item.TransformAngleDelta or 0, tostring(item.CFrameSet), tostring(item.TransformSet))
+            else
+                lines[#lines + 1] = string.format("%02d Motor6D %s | C0 delta %.4f/%.3f deg | C1 delta %.4f/%.3f deg | Transform delta %.4f/%.3f deg", index, tostring(item.Name), item.C0PositionDelta or 0, item.C0AngleDelta or 0, item.C1PositionDelta or 0, item.C1AngleDelta or 0, item.TransformPositionDelta or 0, item.TransformAngleDelta or 0)
+            end
+        end
+        return table.concat(lines, "\n")
     end
 
     local function formatMeshRestoreReport(records)
@@ -1458,13 +1497,14 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         AccessoryCount = 0
                     }
                 else
-                    local restoredModel, restoreError, meshRestoreRecords = deserializeModel(entry.Data)
+                    local restoredModel, restoreError, meshRestoreRecords, skeletonRestoreRecords = deserializeModel(entry.Data)
                     if not restoredModel then
                         notify("Entity Import", restoreError, "Error")
                         return false
                     end
                     diagnostic.Compare = formatModelComparison(entry.Data.SourceStats, measureModel(restoredModel))
                     diagnostic.MeshCompare = formatMeshRestoreReport(meshRestoreRecords)
+                    diagnostic.SkeletonCompare = formatSkeletonRestoreReport(skeletonRestoreRecords)
                     diagnostic.State = "Portable model reconstructed; comparing source"
                     refreshDiagnostic(true)
                     info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
