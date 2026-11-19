@@ -164,7 +164,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         return CFrame.Angles(0, -yaw, 0) * rootCFrame.Rotation
     end
 
-    local function computeBounds(model, root, bodyRotation)
+    local function computeBounds(model, root)
         local function newBounds()
             return {
                 Min = Vector3.new(math.huge, math.huge, math.huge),
@@ -196,7 +196,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     for _, y in ipairs({-1, 1}) do
                         for _, z in ipairs({-1, 1}) do
                             local worldPoint = (part.CFrame * CFrame.new(x * half.X, y * half.Y, z * half.Z)).Position
-                            local point = bodyRotation:VectorToWorldSpace(root.CFrame:PointToObjectSpace(worldPoint))
+                            -- Bounds stay in root-local space. The target root CFrame
+                            -- applies facing/body rotation later during PivotTo.
+                            local point = root.CFrame:PointToObjectSpace(worldPoint)
                             addPoint(complete, point)
                             if part.Transparency < 0.98 then
                                 addPoint(visible, point)
@@ -380,7 +382,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         end
 
         local bodyRotation = getBodyRotation(root.CFrame)
-        local bounds = computeBounds(clone, root, bodyRotation)
+        local bounds = computeBounds(clone, root)
         if not bounds then
             clone:Destroy()
             return nil, "Could not measure the entity bounds"
@@ -1112,7 +1114,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         -- Preserve the selected root's offset from the model pivot. PivotTo moves
         -- the complete entity even when its PrimaryPart is far from its visual center.
         local rootToPivot = root.CFrame:ToObjectSpace(model:GetPivot())
-        local bounds = computeBounds(model, root, bodyRotation)
+        local bounds = computeBounds(model, root)
         if not bounds then
             model:Destroy()
             notify("Entity Import", "Could not measure the cloned model.", "Error")
