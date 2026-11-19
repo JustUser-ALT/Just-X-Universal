@@ -246,8 +246,10 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local function captureEntity(path)
         local source, resolveError = resolvePath(path)
         if not source then return nil, resolveError end
-        if not source:IsA("Model") and not source:IsA("BasePart") then
-            return nil, source:GetFullName() .. " is a " .. source.ClassName .. "; expected a Model or BasePart"
+        local sourceIsPart = source:IsA("BasePart")
+        local sourceIsContainer = source:IsA("Folder") or source:IsA("Accessory") or source:IsA("Tool")
+        if not source:IsA("Model") and not sourceIsPart and not sourceIsContainer then
+            return nil, source:GetFullName() .. " is a " .. source.ClassName .. "; expected a Model, Folder, Accessory, Tool, or BasePart"
         end
 
         local unlocked = {}
@@ -267,11 +269,11 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             return nil, "Clone() failed: " .. tostring(clone)
         end
 
-        if source:IsA("BasePart") then
+        if sourceIsPart or sourceIsContainer then
             local wrapper = Instance.new("Model")
             wrapper.Name = clone.Name
             clone.Parent = wrapper
-            wrapper.PrimaryPart = clone
+            if sourceIsPart then wrapper.PrimaryPart = clone end
             clone = wrapper
         end
 
@@ -981,6 +983,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 end
 
                 if entry then
+                    if active and active.Info == entry.Info then stopEntity() end
                     if entry.Info and entry.Info.Template then
                         pcall(function() entry.Info.Template:Destroy() end)
                     end
