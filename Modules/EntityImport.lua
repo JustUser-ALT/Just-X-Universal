@@ -464,7 +464,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         Attachment = true, Bone = true, SpecialMesh = true,
         Decal = true, Texture = true, SurfaceAppearance = true,
         BodyColors = true, Shirt = true, Pants = true, ShirtGraphic = true,
-        CharacterMesh = true,
+        CharacterMesh = true, Humanoid = true, Animator = true,
+        HumanoidDescription = true,
         Animation = true, Motor6D = true, Weld = true,
         WeldConstraint = true, ManualWeld = true, Snap = true,
         HingeConstraint = true, BallSocketConstraint = true,
@@ -488,6 +489,50 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
     local function enumName(value)
         return tostring(value):match("%.([^%.]+)$")
+    end
+
+    local HUMANOID_DESCRIPTION_PROPERTIES = {
+        "BackAccessory", "BodyTypeScale", "ClimbAnimation", "DepthScale",
+        "Face", "FaceAccessory", "FallAnimation", "FrontAccessory",
+        "GraphicTShirt", "HairAccessory", "HatAccessory", "Head",
+        "HeadColor", "HeadScale", "HeightScale", "IdleAnimation",
+        "JumpAnimation", "LeftArm", "LeftArmColor", "LeftLeg",
+        "LeftLegColor", "NeckAccessory", "Pants", "ProportionScale",
+        "RightArm", "RightArmColor", "RightLeg", "RightLegColor",
+        "RunAnimation", "Shirt", "ShouldersAccessory", "SwimAnimation",
+        "Torso", "TorsoColor", "WaistAccessory", "WalkAnimation",
+        "WidthScale", "MoodAnimation", "AccessoryBlob", "Emotes",
+        "EquippedEmotes"
+    }
+
+    local HUMANOID_PROPERTIES = {
+        "RigType", "DisplayDistanceType", "HealthDisplayType",
+        "Health", "MaxHealth", "HipHeight", "WalkSpeed", "JumpPower",
+        "JumpHeight", "UseJumpPower", "AutoRotate", "BreakJointsOnDeath",
+        "RequiresNeck", "AutomaticScalingEnabled", "EvaluateStateMachine"
+    }
+
+    local function packProperty(value)
+        local valueType = typeof(value)
+        if valueType == "Color3" then
+            return {Type = "Color3", Value = packColor3(value)}
+        elseif valueType == "EnumItem" then
+            return {Type = "Enum", Value = enumName(value)}
+        elseif valueType == "string" or valueType == "number" or valueType == "boolean" then
+            return {Type = valueType, Value = value}
+        end
+        return nil
+    end
+
+    local function serializeProperties(object, propertyNames)
+        local result = {}
+        for _, property in ipairs(propertyNames) do
+            pcall(function()
+                local packed = packProperty(object[property])
+                if packed then result[property] = packed end
+            end)
+        end
+        return result
     end
 
     local function serializeModel(model, animations)
@@ -580,6 +625,10 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     props.MeshId = object.MeshId
                     props.BaseTextureId = object.BaseTextureId
                     props.OverlayTextureId = object.OverlayTextureId
+                elseif object:IsA("Humanoid") then
+                    props.HumanoidProperties = serializeProperties(object, HUMANOID_PROPERTIES)
+                elseif object:IsA("HumanoidDescription") then
+                    props.DescriptionProperties = serializeProperties(object, HUMANOID_DESCRIPTION_PROPERTIES)
                 end
 
                 local index = #nodes + 1
@@ -684,6 +733,32 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             pcall(function() object[property] = enumType[name] end)
         end
 
+        local function restoreProperties(object, properties, enumTypes)
+            if type(properties) ~= "table" then return end
+            for property, packed in pairs(properties) do
+                if type(packed) == "table" then
+                    pcall(function()
+                        if packed.Type == "Color3" then
+                            object[property] = colorFrom(packed.Value)
+                        elseif packed.Type == "Enum" then
+                            local enumType = enumTypes[property]
+                            if enumType and type(packed.Value) == "string" then
+                                object[property] = enumType[packed.Value]
+                            end
+                        elseif packed.Type == "string" or packed.Type == "number" or packed.Type == "boolean" then
+                            object[property] = packed.Value
+                        end
+                    end)
+                end
+            end
+        end
+
+        local humanoidEnumTypes = {
+            RigType = Enum.HumanoidRigType,
+            DisplayDistanceType = Enum.HumanoidDisplayDistanceType,
+            HealthDisplayType = Enum.HumanoidHealthDisplayType
+        }
+
         for index, node in ipairs(data.Nodes) do
             local object = objects[index]
             local props = node.Props or {}
@@ -771,6 +846,10 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 pcall(function() object.MeshId = props.MeshId or "" end)
                 pcall(function() object.BaseTextureId = props.BaseTextureId or "" end)
                 pcall(function() object.OverlayTextureId = props.OverlayTextureId or "" end)
+            elseif object:IsA("Humanoid") then
+                restoreProperties(object, props.HumanoidProperties, humanoidEnumTypes)
+            elseif object:IsA("HumanoidDescription") then
+                restoreProperties(object, props.DescriptionProperties, {})
             end
         end
 
@@ -794,6 +873,15 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     object.Attachment0 = objects[props.Attachment0]
                     object.Attachment1 = objects[props.Attachment1]
                 end)
+            end
+        end
+
+        -- A restored Humanoid must have an Animator. The Animator itself is
+        -- serialized as a structural node when present; create one if it was absent.
+        for _, object in ipairs(objects) do
+            if object and object:IsA("Humanoid") and not object:FindFirstChildOfClass("Animator") then
+                local animator = Instance.new("Animator")
+                animator.Parent = object
             end
         end
 
