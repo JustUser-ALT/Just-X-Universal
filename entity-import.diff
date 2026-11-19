@@ -66,7 +66,7 @@ diff --git a/Modules/EntityImport.lua b/Modules/EntityImport.lua
 new file mode 100644
 --- /dev/null
 +++ b/Modules/EntityImport.lua
-@@ -0,0 +1,1098 @@
+@@ -0,0 +1,1107 @@
 +-- Just X Universal - Entity Import
 +-- Imports arbitrary in-game Models/BaseParts into the existing Skin Changer section.
 +-- Local visual replacement only; it does not modify the server character.
@@ -487,6 +487,13 @@ new file mode 100644
 +                local enabled = true
 +                pcall(function() enabled = object.Enabled end)
 +                if enabled and p0 and p1 and parent[p0] and parent[p1] then
++                    union(p0, p1)
++                end
++            elseif object:IsA("Constraint") then
++                local a0, a1 = object.Attachment0, object.Attachment1
++                local p0 = a0 and a0.Parent
++                local p1 = a1 and a1.Parent
++                if p0 and p1 and parent[p0] and parent[p1] then
 +                    union(p0, p1)
 +                end
 +            end
@@ -1004,6 +1011,8 @@ new file mode 100644
 +    end
 +
 +    loadConfig()
++
++    SkinSection:Divider()
 +
 +    local pathInput = SkinSection:Input({
 +        Name = "Entity Model Path",
