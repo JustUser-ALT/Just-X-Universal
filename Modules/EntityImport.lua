@@ -274,6 +274,59 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         error(tostring(modelOrError) .. " | Fallback: " .. tostring(fallbackModel))
     end
 
+    local AVATAR_DESCRIPTION_FIELDS = {
+        "BackAccessory", "BodyTypeScale", "ClimbAnimation", "DepthScale",
+        "Face", "FaceAccessory", "FallAnimation", "FrontAccessory",
+        "GraphicTShirt", "HairAccessory", "HatAccessory", "Head",
+        "HeadColor", "HeadScale", "HeightScale", "IdleAnimation",
+        "JumpAnimation", "LeftArm", "LeftArmColor", "LeftLeg",
+        "LeftLegColor", "NeckAccessory", "Pants", "ProportionScale",
+        "RightArm", "RightArmColor", "RightLeg", "RightLegColor",
+        "RunAnimation", "Shirt", "ShouldersAccessory", "SwimAnimation",
+        "Torso", "TorsoColor", "WaistAccessory", "WalkAnimation",
+        "WidthScale", "MoodAnimation", "AccessoryBlob"
+    }
+
+    local function captureAvatarDescription(description, rigType)
+        local data = {RigType = rigType == Enum.HumanoidRigType.R6 and "R6" or "R15", Properties = {}}
+        for _, property in ipairs(AVATAR_DESCRIPTION_FIELDS) do
+            pcall(function()
+                local value = description[property]
+                if typeof(value) == "Color3" then
+                    data.Properties[property] = {Type = "Color3", Value = {value.R, value.G, value.B}}
+                elseif type(value) == "string" or type(value) == "number" or type(value) == "boolean" then
+                    data.Properties[property] = {Type = typeof(value), Value = value}
+                end
+            end)
+        end
+        return data
+    end
+
+    local function buildAvatarDescription(data)
+        if type(data) ~= "table" or type(data.Properties) ~= "table" then
+            return nil, "Saved avatar description is missing or damaged"
+        end
+        local description = Instance.new("HumanoidDescription")
+        for property, packed in pairs(data.Properties) do
+            if type(packed) == "table" then
+                pcall(function()
+                    if packed.Type == "Color3" and type(packed.Value) == "table" then
+                        local value = packed.Value
+                        description[property] = Color3.new(
+                            tonumber(value[1]) or 1,
+                            tonumber(value[2]) or 1,
+                            tonumber(value[3]) or 1
+                        )
+                    elseif packed.Type == "string" or packed.Type == "number" or packed.Type == "boolean" then
+                        description[property] = packed.Value
+                    end
+                end)
+            end
+        end
+        local rigType = data.RigType == "R6" and Enum.HumanoidRigType.R6 or Enum.HumanoidRigType.R15
+        return description, rigType
+    end
+
     local function captureEntity(path, sourceOverride)
         local source, resolveError
         if sourceOverride then
@@ -287,6 +340,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local animationSource = source
         local sourceName = source.Name
         local generatedAvatarModel
+        local avatarDescriptionData
 
         if isPlayerCharacter then
             if playerName ~= LocalPlayer.Name then
@@ -311,6 +365,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 return nil, "Could not read your avatar HumanoidDescription: " .. tostring(descriptionOrError)
             end
             description = descriptionOrError
+            avatarDescriptionData = captureAvatarDescription(description, sourceHumanoid.RigType)
 
             local okGenerate, generatedOrError = pcall(function()
                 return createAvatarDescriptionModel(description, sourceHumanoid.RigType)
@@ -364,6 +419,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             Name = sourceName,
             Animations = {},
             Warnings = {},
+            AvatarDescription = avatarDescriptionData,
             PartCount = 0,
             AccessoryCount = 0
         }
@@ -1173,15 +1229,40 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         if not info or not info.Template or not info.Template:IsA("Model") then
             local captureError
             if entry.Data then
-                local restoredModel, restoreError = deserializeModel(entry.Data)
-                if not restoredModel then
-                    notify("Entity Import", restoreError, "Error")
-                    return false
-                end
-                info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
-                restoredModel:Destroy()
-                if info and type(entry.Data.Animations) == "table" then
-                    info.Animations = entry.Data.Animations
+                if type(entry.Data.AvatarDescription) == "table" then
+                    local description, rigTypeOrError = buildAvatarDescription(entry.Data.AvatarDescription)
+                    if not description then
+                        notify("Entity Import", rigTypeOrError, "Error")
+                        return false
+                    end
+                    local okGenerate, generatedOrError = pcall(function()
+                        return createAvatarDescriptionModel(description, rigTypeOrError)
+                    end)
+                    pcall(function() description:Destroy() end)
+                    if not okGenerate or not generatedOrError or not generatedOrError:IsA("Model") then
+                        notify("Entity Import", "Could not rebuild avatar from saved HumanoidDescription: " .. tostring(generatedOrError), "Error")
+                        return false
+                    end
+                    info = {
+                        Template = generatedOrError,
+                        Path = entry.Path or "",
+                        Name = entry.Name,
+                        Animations = type(entry.Data.Animations) == "table" and entry.Data.Animations or {},
+                        Warnings = {},
+                        PartCount = 0,
+                        AccessoryCount = 0
+                    }
+                else
+                    local restoredModel, restoreError = deserializeModel(entry.Data)
+                    if not restoredModel then
+                        notify("Entity Import", restoreError, "Error")
+                        return false
+                    end
+                    info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
+                    restoredModel:Destroy()
+                    if info and type(entry.Data.Animations) == "table" then
+                        info.Animations = entry.Data.Animations
+                    end
                 end
             else
                 notify("Entity Import", "This is an old path-only entry. Re-import it in the original game to create a portable copy.", "Warn")
@@ -1570,6 +1651,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 end
 
                 local portableData, unsupportedClasses = serializeModel(info.Template, info.Animations)
+                if portableData and type(info.AvatarDescription) == "table" then
+                    portableData.AvatarDescription = info.AvatarDescription
+                end
                 if not portableData then
                     info.Template:Destroy()
                     notify("Entity Import", unsupportedClasses, "Error")
