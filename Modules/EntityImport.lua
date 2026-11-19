@@ -5,7 +5,6 @@
 return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     if not SkinSection then error("Entity Import requires the existing Skin Changer section") end
 
-    local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local HttpService = game:GetService("HttpService")
     local Workspace = game:GetService("Workspace")
@@ -27,7 +26,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local hiddenParts = {}
     local hiddenDecals = {}
     local entityDecalTransparency = setmetatable({}, {__mode = "k"})
-    local entityPathInput
     local entityNameInput
     local entityDropdown
     local scaleMode = DEFAULTS.ScaleMode
@@ -49,17 +47,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
     local function trim(value)
         return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    end
-
-    local function ensureFolder()
-        if type(makefolder) ~= "function" then return end
-        pcall(function()
-            if type(isfolder) == "function" then
-                if not isfolder("JustXUniversal") then makefolder("JustXUniversal") end
-            else
-                makefolder("JustXUniversal")
-            end
-        end)
     end
 
     local function normalizeAnimationId(value)
@@ -924,7 +911,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
     local function saveConfig()
         if type(writefile) ~= "function" then return false end
-        ensureFolder()
         local serializable = {}
         for _, item in ipairs(entries) do
             serializable[#serializable + 1] = {Path = item.Path, Name = item.Name}
@@ -965,7 +951,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         Placeholder = "workspace.Monsters.Mimic",
         Flag = "JXU_EntityPath"
     })
-    entityPathInput = pathInput
 
     entityNameInput = SkinSection:Input({
         Name = "Entity Name (Optional)",
