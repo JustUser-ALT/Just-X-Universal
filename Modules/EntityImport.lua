@@ -1109,6 +1109,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
         local slots = buildSlots(info.Animations)
         local bodyRotation = getBodyRotation(root.CFrame)
+        -- Preserve the selected root's offset from the model pivot. PivotTo moves
+        -- the complete entity even when its PrimaryPart is far from its visual center.
+        local rootToPivot = root.CFrame:ToObjectSpace(model:GetPivot())
         local bounds = computeBounds(model, root, bodyRotation)
         if not bounds then
             model:Destroy()
@@ -1173,7 +1176,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 floorY - bounds.Min.Y + verticalOffset,
                 currentRoot.Position.Z - horizontal.Z
             )
-            root.CFrame = CFrame.new(position) * facing * bodyRotation
+            local targetRootCFrame = CFrame.new(position) * facing * bodyRotation
+            model:PivotTo(targetRootCFrame * rootToPivot)
         end
 
         positionEntity()
@@ -1229,7 +1233,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 floorY - runtime.Bounds.Min.Y + verticalOffset,
                 currentRoot.Position.Z - horizontal.Z
             )
-            root.CFrame = CFrame.new(position) * facing * runtime.BodyRotation
+            local targetRootCFrame = CFrame.new(position) * facing * runtime.BodyRotation
+            model:PivotTo(targetRootCFrame * rootToPivot)
 
             local cameraHidden = isFirstPerson(character)
             if cameraHidden ~= visibleInFirstPerson then
