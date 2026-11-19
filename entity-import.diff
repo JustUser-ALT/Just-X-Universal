@@ -1,7 +1,7 @@
 diff --git a/Modules/Avatar.lua b/Modules/Avatar.lua
 --- a/Modules/Avatar.lua
 +++ b/Modules/Avatar.lua
-@@ -1247,7 +1247,7 @@
+@@ -1247,6 +1247,7 @@
      local skinAnimationCleanup
      local skinPreviewHiddenInFirstPerson = false
      local previousSkinAnimationMap
@@ -9,7 +9,7 @@ diff --git a/Modules/Avatar.lua b/Modules/Avatar.lua
      
      local function disconnectSkinPreviewConnections()
          for name, connection in pairs(skinPreviewConnections) do
-@@ -1510,7 +1510,7 @@
+@@ -1509,6 +1510,7 @@
      end
      
      local function buildLocalSkinPreview(data)
@@ -17,7 +17,7 @@ diff --git a/Modules/Avatar.lua b/Modules/Avatar.lua
          if type(data) ~= "table" or type(data.Properties) ~= "table" then
              error("Saved skin data is invalid")
          end
-@@ -1716,7 +1716,7 @@
+@@ -1714,6 +1716,7 @@
      end
      
      local function resetSkin()
@@ -25,7 +25,7 @@ diff --git a/Modules/Avatar.lua b/Modules/Avatar.lua
          if not originalSkinData then
              local okOriginal, description = pcall(getCurrentHumanoidDescription)
              if okOriginal then
-@@ -1830,36 +1830,36 @@
+@@ -1827,6 +1830,36 @@
          Name = "Reset Skin",
          Callback = resetSkin
      })
@@ -66,7 +66,7 @@ diff --git a/Modules/EntityImport.lua b/Modules/EntityImport.lua
 new file mode 100644
 --- /dev/null
 +++ b/Modules/EntityImport.lua
-@@ -0,0 +1,1085 @@
+@@ -0,0 +1,1084 @@
 +-- Just X Universal - Entity Import
 +-- Imports arbitrary in-game Models/BaseParts into the existing Skin Changer section.
 +-- Local visual replacement only; it does not modify the server character.
@@ -1151,4 +1151,3 @@ new file mode 100644
 +
 +    return stopEntity
 +end
-+
