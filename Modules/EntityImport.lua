@@ -17,7 +17,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local VISUAL_LIFT = 15
     local DISABLE_ENTITY_ANIMATIONS = true -- Temporary diagnostic: test restored rig without imported animation tracks
     local RESET_SKELETON_TRANSFORMS = true -- Temporary diagnostic: restore neutral Bone/Motor6D pose
-    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-08"
+    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-09"
     local diagnosticLabel
     local diagnostic = {
         State = "Waiting for entity",
@@ -784,6 +784,10 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         meshRecord.MeshId = props.MeshId or ""
                         meshRecord.TextureID = props.TextureID or ""
                         meshRecord.Size = props.Size
+                        pcall(function()
+                            props.MeshSize = packVector3(object.MeshSize)
+                            meshRecord.MeshSize = props.MeshSize
+                        end)
                         sourceMeshes[#sourceMeshes + 1] = meshRecord
                     elseif object:IsA("UnionOperation") then
                         unsupported.UnionOperation = true
@@ -791,6 +795,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 elseif object:IsA("Bone") then
                     props.CFrame = packCFrame(object.CFrame)
                     props.Transform = packCFrame(object.Transform)
+                    pcall(function()
+                        props.SourceWorldCFrame = packCFrame(rootFrame:ToObjectSpace(object.WorldCFrame))
+                    end)
                     props.Axis = packVector3(object.Axis)
                     props.SecondaryAxis = packVector3(object.SecondaryAxis)
                 elseif object:IsA("Attachment") then
@@ -1204,9 +1211,14 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local geometryLines = {}
         local partCount, boneCount, parentMismatches = 0, 0, 0
         local maxPositionDelta, maxAngleDelta = 0, 0
+        local maxBoneWorldPositionDelta, maxBoneWorldAngleDelta = 0, 0
+        local maxMeshSizeDelta = 0
         local largestParts = {}
+        local largestBones = {}
+        local meshSizeLines = {}
         local hierarchyIssues = {}
         local surfaceLines = {}
+        local restoredRoot = objects[tonumber(data.RootIndex)]
         for index, node in ipairs(data.Nodes) do
             local object = objects[index]
             local props = node.Props or {}
@@ -1224,6 +1236,18 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         Name = object.Name, Position = positionDelta, Angle = angleDelta
                     }
                 end
+                if object:IsA("MeshPart") and props.MeshSize then
+                    local expectedMeshSize = vectorFrom(props.MeshSize)
+                    local actualMeshSize = object.MeshSize
+                    local meshDelta = (expectedMeshSize - actualMeshSize).Magnitude
+                    maxMeshSizeDelta = math.max(maxMeshSizeDelta, meshDelta)
+                    meshSizeLines[#meshSizeLines + 1] = string.format(
+                        "%02d %s | SOURCE %.3f / %.3f / %.3f | RESTORED %.3f / %.3f / %.3f | DELTA %.5f",
+                        #meshSizeLines + 1, object.Name,
+                        expectedMeshSize.X, expectedMeshSize.Y, expectedMeshSize.Z,
+                        actualMeshSize.X, actualMeshSize.Y, actualMeshSize.Z, meshDelta
+                    )
+                end
             elseif object and object:IsA("Bone") then
                 boneCount += 1
                 local expectedParent = objects[tonumber(node.Parent)]
@@ -1231,6 +1255,30 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     parentMismatches += 1
                     hierarchyIssues[#hierarchyIssues + 1] = object.Name .. " expected " .. expectedParent.Name
                         .. " got " .. (object.Parent and object.Parent.Name or "nil")
+                end
+                local expectedLocal = cframeFrom(props.CFrame)
+                local localDelta = expectedLocal:ToObjectSpace(object.CFrame)
+                local _, localAngle = localDelta:ToAxisAngle()
+                local worldPositionDelta, worldAngleDelta = 0, 0
+                if props.SourceWorldCFrame and restoredRoot then
+                    local expectedWorld = cframeFrom(props.SourceWorldCFrame)
+                    local actualWorld = restoredRoot.CFrame:ToObjectSpace(object.WorldCFrame)
+                    local worldDelta = expectedWorld:ToObjectSpace(actualWorld)
+                    local _, worldAngle = worldDelta:ToAxisAngle()
+                    worldPositionDelta = worldDelta.Position.Magnitude
+                    worldAngleDelta = math.deg(worldAngle)
+                end
+                maxBoneWorldPositionDelta = math.max(maxBoneWorldPositionDelta, worldPositionDelta)
+                maxBoneWorldAngleDelta = math.max(maxBoneWorldAngleDelta, worldAngleDelta)
+                if localDelta.Position.Magnitude > 0.001 or math.deg(localAngle) > 0.01
+                    or worldPositionDelta > 0.001 or worldAngleDelta > 0.01 then
+                    largestBones[#largestBones + 1] = {
+                        Name = object.Name,
+                        LocalPosition = localDelta.Position.Magnitude,
+                        LocalAngle = math.deg(localAngle),
+                        WorldPosition = worldPositionDelta,
+                        WorldAngle = worldAngleDelta
+                    }
                 end
             elseif object and object:IsA("SurfaceAppearance") then
                 local maps = {}
@@ -1261,10 +1309,32 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             geometryLines[#geometryLines + 1] = "All BasePart local CFrames match saved values"
         end
         geometryLines[#geometryLines + 1] = string.format(
+            "BONE CFRAME: %d | WORLD MAX POSITION DELTA: %.5f | WORLD MAX ANGLE DELTA: %.4f deg",
+            boneCount, maxBoneWorldPositionDelta, maxBoneWorldAngleDelta
+        )
+        table.sort(largestBones, function(a, b)
+            return math.max(a.WorldPosition, a.WorldAngle, a.LocalPosition, a.LocalAngle)
+                > math.max(b.WorldPosition, b.WorldAngle, b.LocalPosition, b.LocalAngle)
+        end)
+        for index = 1, math.min(12, #largestBones) do
+            local item = largestBones[index]
+            geometryLines[#geometryLines + 1] = string.format(
+                "BONE %02d %s | LOCAL %.5f / %.4f deg | WORLD %.5f / %.4f deg",
+                index, item.Name, item.LocalPosition, item.LocalAngle,
+                item.WorldPosition, item.WorldAngle
+            )
+        end
+        geometryLines[#geometryLines + 1] = string.format(
             "BONE PARENTS: %d | MISMATCHES: %d", boneCount, parentMismatches
         )
         for index = 1, math.min(10, #hierarchyIssues) do
             geometryLines[#geometryLines + 1] = string.format("%02d %s", index, hierarchyIssues[index])
+        end
+        geometryLines[#geometryLines + 1] = string.format(
+            "MESH SIZE: %d | MAX DELTA: %.5f", #meshSizeLines, maxMeshSizeDelta
+        )
+        for index = 1, math.min(15, #meshSizeLines) do
+            geometryLines[#geometryLines + 1] = meshSizeLines[index]
         end
         geometryLines[#geometryLines + 1] = "SURFACE APPEARANCE MAPS:"
         for index = 1, math.min(12, #surfaceLines) do
