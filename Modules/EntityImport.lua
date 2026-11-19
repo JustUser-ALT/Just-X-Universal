@@ -5,6 +5,7 @@
 return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     if not SkinSection then error("Entity Import requires the existing Skin Changer section") end
 
+    local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local HttpService = game:GetService("HttpService")
     local Workspace = game:GetService("Workspace")
