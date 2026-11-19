@@ -1840,7 +1840,7 @@ return function(Window, JL)
         end
     end
 
-    local ENTITY_IMPORT_MODULE_URL = "https://raw.githubusercontent.com/JustUser-ALT/Just-X-Universal/main/Modules/EntityImport.lua?v=175f2ce8"
+    local ENTITY_IMPORT_MODULE_URL = "https://raw.githubusercontent.com/JustUser-ALT/Just-X-Universal/main/Modules/EntityImport.lua?v=e980f01a"
     local entityModuleOk, EntityImportModule = pcall(function()
         local source = game:HttpGet(ENTITY_IMPORT_MODULE_URL)
         local chunk = loadstring(source)
