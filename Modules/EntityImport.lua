@@ -1060,7 +1060,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         table.sort(warningNames)
 
         return {
-            Version = 2,
+            Version = 3,
             Name = model.Name,
             RootIndex = indices[root],
             PrimaryPartIndex = primaryIndex,
@@ -1073,7 +1073,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     end
 
     local function deserializeModel(data)
-        if type(data) ~= "table" or (data.Version ~= 1 and data.Version ~= 2) or type(data.Nodes) ~= "table" then
+        if type(data) ~= "table" or (data.Version ~= 1 and data.Version ~= 2 and data.Version ~= 3) or type(data.Nodes) ~= "table" then
             return nil, "Unsupported or damaged portable entity file"
         end
 
@@ -1314,21 +1314,34 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             if node.Class == "MeshPart" then
                 local placeholder = objects[index]
                 local props = node.Props or {}
-                if type(props.PortableMesh) ~= "table" then
-                    error("MeshPart '" .. tostring(node.Name) .. "' has no portable EditableMesh payload; re-import this entity")
+                local meshPart
+                local editableMesh
+                if type(props.PortableMesh) == "table" then
+                    editableMesh = restoreEditableMesh(props.PortableMesh)
+                    local meshPartOk, meshPartOrError = pcall(function()
+                        return AssetService:CreateMeshPartAsync(Content.fromObject(editableMesh), {
+                            CollisionFidelity = Enum.CollisionFidelity.Box,
+                            RenderFidelity = Enum.RenderFidelity.Precise
+                        })
+                    end)
+                    if not meshPartOk or not meshPartOrError then
+                        pcall(function() editableMesh:Destroy() end)
+                        error("CreateMeshPartAsync failed for " .. tostring(node.Name) .. ": " .. tostring(meshPartOrError))
+                    end
+                    meshPart = meshPartOrError
+                    editableMeshReferences[#editableMeshReferences + 1] = editableMesh
+                else
+                    -- Legacy v1/v2 entries may only contain MeshId. Keep their old same-game fallback.
+                    meshPart = Instance.new("MeshPart")
+                    local legacyOk, legacyError = pcall(function()
+                        meshPart.MeshId = props.MeshId or ""
+                        meshPart.TextureID = props.TextureID or ""
+                    end)
+                    if not legacyOk then
+                        meshPart:Destroy()
+                        error("Legacy MeshId fallback failed for " .. tostring(node.Name) .. ": " .. tostring(legacyError))
+                    end
                 end
-                local editableMesh = restoreEditableMesh(props.PortableMesh)
-                local meshPartOk, meshPartOrError = pcall(function()
-                    return AssetService:CreateMeshPartAsync(Content.fromObject(editableMesh), {
-                        CollisionFidelity = Enum.CollisionFidelity.Box,
-                        RenderFidelity = Enum.RenderFidelity.Precise
-                    })
-                end)
-                if not meshPartOk or not meshPartOrError then
-                    pcall(function() editableMesh:Destroy() end)
-                    error("CreateMeshPartAsync failed for " .. tostring(node.Name) .. ": " .. tostring(meshPartOrError))
-                end
-                local meshPart = meshPartOrError
                 meshPart.Name = placeholder.Name
                 meshPart.Size = placeholder.Size
                 meshPart.CFrame = placeholder.CFrame
@@ -1350,7 +1363,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 for _, child in ipairs(placeholder:GetChildren()) do child.Parent = meshPart end
                 objects[index] = meshPart
                 placeholder:Destroy()
-                editableMeshReferences[#editableMeshReferences + 1] = editableMesh
             end
         end
 
@@ -1942,7 +1954,11 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         AccessoryCount = 0
                     }
                 else
-                    local restoredModel, restoreError, meshRestoreRecords, skeletonRestoreRecords, geometryRestoreReport = deserializeModel(entry.Data)
+                    local restoreOk, restoredModel, restoreError, meshRestoreRecords, skeletonRestoreRecords, geometryRestoreReport = pcall(deserializeModel, entry.Data)
+                    if not restoreOk then
+                        notify("Entity Import", "Portable reconstruction failed: " .. tostring(restoredModel), "Error")
+                        return false
+                    end
                     if not restoredModel then
                         notify("Entity Import", restoreError, "Error")
                         return false
@@ -2372,7 +2388,12 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     return
                 end
 
-                local portableData, unsupportedClasses = serializeModel(info.Template, info.Animations)
+                local serializeOk, portableData, unsupportedClasses = pcall(serializeModel, info.Template, info.Animations)
+                if not serializeOk then
+                    info.Template:Destroy()
+                    notify("Entity Import", "Portable export failed: " .. tostring(portableData), "Error")
+                    return
+                end
                 if portableData then
                     local stats = portableData.SourceStats
                     diagnostic.Compare = string.format(
