@@ -582,6 +582,18 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         "RequiresNeck", "AutomaticScalingEnabled", "EvaluateStateMachine"
     }
 
+    local CONSTRAINT_PROPERTIES = {
+        "Visible", "LimitsEnabled", "UpperAngle", "LowerAngle", "Restitution",
+        "Radius", "Thickness", "Length", "FreeLength", "Stiffness", "Damping",
+        "MaxForce", "MaxTorque", "Responsiveness", "RigidityEnabled",
+        "ReactionForceEnabled", "ApplyAtCenterOfMass", "PrimaryAxisOnly",
+        "AngularLimitsEnabled", "TwistLimitsEnabled", "TwistLowerAngle",
+        "TwistUpperAngle", "TargetPosition", "TargetAngle", "AngularSpeed",
+        "LinearSpeed", "ServoMaxTorque", "ServoMaxForce", "ActuatorType",
+        "Mode", "WinchEnabled", "WinchTarget", "WinchForce",
+        "WinchResponsiveness", "WinchSpeed"
+    }
+
     local function packProperty(value)
         local valueType = typeof(value)
         if valueType == "Color3" then
@@ -742,6 +754,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             elseif object:IsA("Constraint") then
                 props.Attachment0 = indices[object.Attachment0]
                 props.Attachment1 = indices[object.Attachment1]
+                props.ConstraintProperties = serializeProperties(object, CONSTRAINT_PROPERTIES)
                 pcall(function() props.Enabled = object.Enabled end)
             end
         end
@@ -840,6 +853,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             RigType = Enum.HumanoidRigType,
             DisplayDistanceType = Enum.HumanoidDisplayDistanceType,
             HealthDisplayType = Enum.HumanoidHealthDisplayType
+        }
+        local constraintEnumTypes = {
+            ActuatorType = Enum.ActuatorType
         }
 
         for index, node in ipairs(data.Nodes) do
@@ -967,12 +983,14 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     object.Part0 = objects[props.Part0]
                     object.Part1 = objects[props.Part1]
                     if props.Enabled ~= nil then object.Enabled = props.Enabled end
+                    restoreProperties(object, props.ConstraintProperties, constraintEnumTypes)
                 end)
             elseif object:IsA("Constraint") then
                 pcall(function()
                     object.Attachment0 = objects[props.Attachment0]
                     object.Attachment1 = objects[props.Attachment1]
                     if props.Enabled ~= nil then object.Enabled = props.Enabled end
+                    restoreProperties(object, props.ConstraintProperties, constraintEnumTypes)
                 end)
             end
         end
