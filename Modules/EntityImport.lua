@@ -16,6 +16,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local SAMPLE_TIME = 2
     local VISUAL_LIFT = 15
     local DISABLE_ENTITY_ANIMATIONS = true -- Temporary diagnostic: test restored rig without imported animation tracks
+    local RESET_SKELETON_TRANSFORMS = true -- Temporary diagnostic: restore neutral Bone/Motor6D pose
     local DIAGNOSTIC_BUILD = "ENTITY-DIAG-07"
     local diagnosticLabel
     local diagnostic = {
@@ -95,6 +96,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             "Previous-frame overwrite: " .. tostring(diagnostic.OverwriteDelta or "-"),
             "VISUAL LIFT: " .. tostring(VISUAL_LIFT),
             "ANIMATIONS DISABLED: " .. tostring(DISABLE_ENTITY_ANIMATIONS),
+            "SKELETON TRANSFORMS RESET: " .. tostring(RESET_SKELETON_TRANSFORMS),
             "",
             "SOURCE -> RESTORED",
             tostring(diagnostic.Compare),
@@ -1060,7 +1062,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 end
             elseif object:IsA("Bone") then
                 local cframeOk = pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
-                local transformOk = pcall(function() object.Transform = cframeFrom(props.Transform) end)
+                -- Diagnostic: discard the captured pose and restore the neutral bone transform.
+                local transformOk = pcall(function() object.Transform = CFrame.identity end)
                 pcall(function() object.Axis = vectorFrom(props.Axis) end)
                 pcall(function() object.SecondaryAxis = vectorFrom(props.SecondaryAxis) end)
                 local cfDelta = cframeFrom(props.CFrame):ToObjectSpace(object.CFrame)
@@ -1135,8 +1138,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     object.C0 = cframeFrom(props.C0)
                     object.C1 = cframeFrom(props.C1)
                     if props.Enabled ~= nil then object.Enabled = props.Enabled end
-                    if object:IsA("Motor6D") and props.Transform then
-                        object.Transform = cframeFrom(props.Transform)
+                    if object:IsA("Motor6D") then
+                        -- Diagnostic: discard the captured pose and restore a neutral joint transform.
+                        object.Transform = CFrame.identity
                         local c0Delta = cframeFrom(props.C0):ToObjectSpace(object.C0)
                         local c1Delta = cframeFrom(props.C1):ToObjectSpace(object.C1)
                         local trDelta = cframeFrom(props.Transform):ToObjectSpace(object.Transform)
