@@ -1184,37 +1184,6 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         return below
     end
 
-    -- Measure the actual visible character geometry below its root.
-    -- This is more reliable than HipHeight for custom monster skins, whose
-    -- body proportions can differ greatly from the original Roblox rig.
-    local function getCharacterFloorOffset(character, root, fallback)
-        local minY = math.huge
-        local found = false
-
-        for _, part in ipairs(character:GetDescendants()) do
-            if part:IsA("BasePart") and part ~= root and part.Transparency < 0.98 then
-                local half = part.Size / 2
-                for _, x in ipairs({-1, 1}) do
-                    for _, y in ipairs({-1, 1}) do
-                        for _, z in ipairs({-1, 1}) do
-                            local worldPoint = (part.CFrame * CFrame.new(
-                                x * half.X,
-                                y * half.Y,
-                                z * half.Z
-                            )).Position
-                            local localPoint = root.CFrame:PointToObjectSpace(worldPoint)
-                            if localPoint.Y < minY then minY = localPoint.Y end
-                            found = true
-                        end
-                    end
-                end
-            end
-        end
-
-        if not found then return fallback end
-        return math.max(0, -minY)
-    end
-
     local function applyEntity(entry)
         stopEntity()
         if type(clearSkinPreview) == "function" then
@@ -1347,11 +1316,10 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         -- Preserve the selected root's offset from the model pivot. PivotTo moves
         -- the complete entity even when its PrimaryPart is far from its visual center.
         local rootToPivot = root.CFrame:ToObjectSpace(model:GetPivot())
-        local characterFloorOffset = getCharacterFloorOffset(
-            character,
-            playerRoot,
-            getPlayerFloorOffset(humanoid, playerRoot)
-        )
+        -- The clone is aligned directly to the raycast floor. Keep the
+        -- player's root Y at activation as the jump/fall reference so only
+        -- the local clone follows vertical movement.
+        local initialPlayerRootY = playerRoot.Position.Y
         local bounds = computeBounds(model, root, bodyRotation)
         if not bounds then
             model:Destroy()
@@ -1409,11 +1377,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local facing = CFrame.Angles(0, yaw, 0)
             local floorY = getFloorY(currentRoot)
             local horizontal = facing:VectorToWorldSpace(Vector3.new(bounds.Center.X, 0, bounds.Center.Z))
-            -- Only the local visual clone receives this vertical correction.
-            -- The baseline is measured from the actual installed character skin,
-            -- not inferred from Humanoid.HipHeight.
-            local verticalOffset = currentRoot.Position.Y
-                - floorY - characterFloorOffset
+            -- Ground alignment is independent of the player's HipHeight.
+            -- This delta moves only the clone when the real character jumps/falls.
+            local verticalOffset = currentRoot.Position.Y - initialPlayerRootY
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
                 floorY - bounds.Min.Y + verticalOffset,
@@ -1469,9 +1435,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local facing = CFrame.Angles(0, yaw, 0)
             local floorY = getFloorY(currentRoot)
             local horizontal = facing:VectorToWorldSpace(Vector3.new(runtime.Bounds.Center.X, 0, runtime.Bounds.Center.Z))
-            -- Keep the same measured standing baseline while following jumps/falls.
-            local verticalOffset = currentRoot.Position.Y
-                - floorY - characterFloorOffset
+            -- Follow only the real character's vertical displacement since activation.
+            local verticalOffset = currentRoot.Position.Y - initialPlayerRootY
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
                 floorY - runtime.Bounds.Min.Y + verticalOffset,
