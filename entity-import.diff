@@ -66,7 +66,7 @@ diff --git a/Modules/EntityImport.lua b/Modules/EntityImport.lua
 new file mode 100644
 --- /dev/null
 +++ b/Modules/EntityImport.lua
-@@ -0,0 +1,1107 @@
+@@ -0,0 +1,1108 @@
 +-- Just X Universal - Entity Import
 +-- Imports arbitrary in-game Models/BaseParts into the existing Skin Changer section.
 +-- Local visual replacement only; it does not modify the server character.
@@ -74,7 +74,6 @@ new file mode 100644
 +return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 +    if not SkinSection then error("Entity Import requires the existing Skin Changer section") end
 +
-+    local Players = game:GetService("Players")
 +    local RunService = game:GetService("RunService")
 +    local HttpService = game:GetService("HttpService")
 +    local Workspace = game:GetService("Workspace")
@@ -96,7 +95,6 @@ new file mode 100644
 +    local hiddenParts = {}
 +    local hiddenDecals = {}
 +    local entityDecalTransparency = setmetatable({}, {__mode = "k"})
-+    local entityPathInput
 +    local entityNameInput
 +    local entityDropdown
 +    local scaleMode = DEFAULTS.ScaleMode
@@ -118,17 +116,6 @@ new file mode 100644
 +
 +    local function trim(value)
 +        return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
-+    end
-+
-+    local function ensureFolder()
-+        if type(makefolder) ~= "function" then return end
-+        pcall(function()
-+            if type(isfolder) == "function" then
-+                if not isfolder("JustXUniversal") then makefolder("JustXUniversal") end
-+            else
-+                makefolder("JustXUniversal")
-+            end
-+        end)
 +    end
 +
 +    local function normalizeAnimationId(value)
@@ -244,41 +231,57 @@ new file mode 100644
 +    end
 +
 +    local function computeBounds(model, root, bodyRotation)
-+        local minimum = Vector3.new(math.huge, math.huge, math.huge)
-+        local maximum = Vector3.new(-math.huge, -math.huge, -math.huge)
-+        local count = 0
++        local function newBounds()
++            return {
++                Min = Vector3.new(math.huge, math.huge, math.huge),
++                Max = Vector3.new(-math.huge, -math.huge, -math.huge),
++                Count = 0
++            }
++        end
++
++        local visible = newBounds()
++        local complete = newBounds()
++
++        local function addPoint(bounds, point)
++            bounds.Min = Vector3.new(
++                math.min(bounds.Min.X, point.X),
++                math.min(bounds.Min.Y, point.Y),
++                math.min(bounds.Min.Z, point.Z)
++            )
++            bounds.Max = Vector3.new(
++                math.max(bounds.Max.X, point.X),
++                math.max(bounds.Max.Y, point.Y),
++                math.max(bounds.Max.Z, point.Z)
++            )
++        end
 +
 +        for _, part in ipairs(model:GetDescendants()) do
-+            if part:IsA("BasePart") and part.Transparency < 0.98 then
++            if part:IsA("BasePart") then
 +                local half = part.Size / 2
 +                for _, x in ipairs({-1, 1}) do
 +                    for _, y in ipairs({-1, 1}) do
 +                        for _, z in ipairs({-1, 1}) do
 +                            local worldPoint = (part.CFrame * CFrame.new(x * half.X, y * half.Y, z * half.Z)).Position
 +                            local point = bodyRotation:VectorToWorldSpace(root.CFrame:PointToObjectSpace(worldPoint))
-+                            minimum = Vector3.new(
-+                                math.min(minimum.X, point.X),
-+                                math.min(minimum.Y, point.Y),
-+                                math.min(minimum.Z, point.Z)
-+                            )
-+                            maximum = Vector3.new(
-+                                math.max(maximum.X, point.X),
-+                                math.max(maximum.Y, point.Y),
-+                                math.max(maximum.Z, point.Z)
-+                            )
++                            addPoint(complete, point)
++                            if part.Transparency < 0.98 then
++                                addPoint(visible, point)
++                            end
 +                        end
 +                    end
 +                end
-+                count += 1
++                complete.Count += 1
++                if part.Transparency < 0.98 then visible.Count += 1 end
 +            end
 +        end
 +
-+        if count == 0 then return nil end
++        local used = visible.Count > 0 and visible or complete
++        if used.Count == 0 then return nil end
 +        return {
-+            Min = minimum,
-+            Max = maximum,
-+            Size = maximum - minimum,
-+            Center = (minimum + maximum) / 2
++            Min = used.Min,
++            Max = used.Max,
++            Size = used.Max - used.Min,
++            Center = (used.Min + used.Max) / 2
 +        }
 +    end
 +
@@ -978,7 +981,6 @@ new file mode 100644
 +
 +    local function saveConfig()
 +        if type(writefile) ~= "function" then return false end
-+        ensureFolder()
 +        local serializable = {}
 +        for _, item in ipairs(entries) do
 +            serializable[#serializable + 1] = {Path = item.Path, Name = item.Name}
@@ -1019,7 +1021,6 @@ new file mode 100644
 +        Placeholder = "workspace.Monsters.Mimic",
 +        Flag = "JXU_EntityPath"
 +    })
-+    entityPathInput = pathInput
 +
 +    entityNameInput = SkinSection:Input({
 +        Name = "Entity Name (Optional)",
