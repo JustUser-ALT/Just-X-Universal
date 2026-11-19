@@ -123,6 +123,16 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         return current
     end
 
+    local function isPlayerCharacterSource(source)
+        for _, player in ipairs(Players:GetPlayers()) do
+            local character = player.Character
+            if character and (source == character or source:IsDescendantOf(character)) then
+                return true, player.Name
+            end
+        end
+        return false
+    end
+
     local function pickRoot(model)
         if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then
             return model.PrimaryPart, "PrimaryPart"
@@ -243,6 +253,13 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local function captureEntity(path)
         local source, resolveError = resolvePath(path)
         if not source then return nil, resolveError end
+
+        local isPlayerCharacter, playerName = isPlayerCharacterSource(source)
+        if isPlayerCharacter then
+            return nil, "The selected path points to player character '" .. playerName
+                .. "'. Entity Import only accepts NPCs or other models, not player characters."
+        end
+
         local sourceIsPart = source:IsA("BasePart")
         local sourceIsContainer = source:IsA("Folder") or source:IsA("Accessory") or source:IsA("Tool")
         if not source:IsA("Model") and not sourceIsPart and not sourceIsContainer then
@@ -771,9 +788,11 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local facing = CFrame.Angles(0, yaw, 0)
             local floorY = getFloorY(currentRoot)
             local horizontal = facing:VectorToWorldSpace(Vector3.new(bounds.Center.X, 0, bounds.Center.Z))
+            local verticalOffset = currentRoot.Position.Y
+                - floorY - getPlayerFloorOffset(humanoid, currentRoot)
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
-                floorY - bounds.Min.Y,
+                floorY - bounds.Min.Y + verticalOffset,
                 currentRoot.Position.Z - horizontal.Z
             )
             root.CFrame = CFrame.new(position) * facing * bodyRotation
@@ -825,9 +844,11 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             local facing = CFrame.Angles(0, yaw, 0)
             local floorY = getFloorY(currentRoot)
             local horizontal = facing:VectorToWorldSpace(Vector3.new(runtime.Bounds.Center.X, 0, runtime.Bounds.Center.Z))
+            local verticalOffset = currentRoot.Position.Y
+                - floorY - getPlayerFloorOffset(humanoid, currentRoot)
             local position = Vector3.new(
                 currentRoot.Position.X - horizontal.X,
-                floorY - runtime.Bounds.Min.Y,
+                floorY - runtime.Bounds.Min.Y + verticalOffset,
                 currentRoot.Position.Z - horizontal.Z
             )
             root.CFrame = CFrame.new(position) * facing * runtime.BodyRotation
@@ -881,9 +902,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         table.sort(animationNames)
 
         local summary = string.format(
-            "Loaded %s | %.2fx scale | %d parts | animations: %s",
+            "Loaded %s | %d parts | animations: %s",
             entry.Name,
-            scale,
             info.PartCount,
             #animationNames > 0 and table.concat(animationNames, ", ") or "none"
         )
