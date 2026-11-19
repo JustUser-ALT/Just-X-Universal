@@ -66,7 +66,7 @@ diff --git a/Modules/EntityImport.lua b/Modules/EntityImport.lua
 new file mode 100644
 --- /dev/null
 +++ b/Modules/EntityImport.lua
-@@ -0,0 +1,1084 @@
+@@ -0,0 +1,1098 @@
 +-- Just X Universal - Entity Import
 +-- Imports arbitrary in-game Models/BaseParts into the existing Skin Changer section.
 +-- Local visual replacement only; it does not modify the server character.
@@ -95,6 +95,7 @@ new file mode 100644
 +    local connections = {}
 +    local hiddenParts = {}
 +    local hiddenDecals = {}
++    local entityDecalTransparency = setmetatable({}, {__mode = "k"})
 +    local entityPathInput
 +    local entityNameInput
 +    local entityDropdown
@@ -662,7 +663,20 @@ new file mode 100644
 +            if object:IsA("BasePart") then
 +                object.LocalTransparencyModifier = hidden and 1 or 0
 +            elseif object:IsA("Decal") or object:IsA("Texture") then
-+                pcall(function() object.LocalTransparencyModifier = hidden and 1 or 0 end)
++                local okLocalTransparency = pcall(function()
++                    object.LocalTransparencyModifier = hidden and 1 or 0
++                end)
++                if not okLocalTransparency then
++                    if hidden then
++                        if entityDecalTransparency[object] == nil then
++                            entityDecalTransparency[object] = object.Transparency
++                        end
++                        object.Transparency = 1
++                    elseif entityDecalTransparency[object] ~= nil then
++                        object.Transparency = entityDecalTransparency[object]
++                        entityDecalTransparency[object] = nil
++                    end
++                end
 +            end
 +        end
 +    end
