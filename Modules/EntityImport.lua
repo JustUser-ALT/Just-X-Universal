@@ -250,8 +250,13 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         }
     end
 
-    local function captureEntity(path)
-        local source, resolveError = resolvePath(path)
+    local function captureEntity(path, sourceOverride)
+        local source, resolveError
+        if sourceOverride then
+            source = sourceOverride
+        else
+            source, resolveError = resolvePath(path)
+        end
         if not source then return nil, resolveError end
 
         local isPlayerCharacter, playerName = isPlayerCharacterSource(source)
@@ -390,6 +395,319 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         end
 
         return info
+    end
+
+    local SERIALIZABLE_CLASSES = {
+        Model = true, Folder = true, Accessory = true, Tool = true,
+        Attachment = true, Bone = true, SpecialMesh = true,
+        Decal = true, Texture = true, SurfaceAppearance = true,
+        Animation = true, Motor6D = true, Weld = true,
+        WeldConstraint = true, ManualWeld = true, Snap = true,
+        HingeConstraint = true, BallSocketConstraint = true,
+        RopeConstraint = true, RodConstraint = true, SpringConstraint = true,
+        CylindricalConstraint = true, PrismaticConstraint = true,
+        AlignPosition = true, AlignOrientation = true,
+        NoCollisionConstraint = true, WrapLayer = true, WrapTarget = true
+    }
+
+    local function packVector3(value)
+        return {value.X, value.Y, value.Z}
+    end
+
+    local function packColor3(value)
+        return {value.R, value.G, value.B}
+    end
+
+    local function packCFrame(value)
+        return {value:GetComponents()}
+    end
+
+    local function enumName(value)
+        return tostring(value):match("%.([^%.]+)$")
+    end
+
+    local function serializeModel(model, animations)
+        local root = pickRoot(model)
+        if not root then return nil, "No root part found for portable save" end
+
+        local nodes = {}
+        local indices = {}
+        local unsupported = {}
+        local rootFrame = root.CFrame
+
+        local function visit(object, parentIndex)
+            local isPart = object:IsA("BasePart")
+            local supported = object == model or isPart or SERIALIZABLE_CLASSES[object.ClassName]
+            local nextParent = parentIndex
+
+            if supported then
+                local node = {
+                    Class = object.ClassName,
+                    Name = object.Name,
+                    Parent = parentIndex,
+                    Props = {}
+                }
+                local props = node.Props
+
+                if isPart then
+                    props.CFrame = packCFrame(rootFrame:ToObjectSpace(object.CFrame))
+                    props.Size = packVector3(object.Size)
+                    props.Color = packColor3(object.Color)
+                    props.Material = enumName(object.Material)
+                    props.Transparency = object.Transparency
+                    props.Reflectance = object.Reflectance
+                    props.Anchored = object.Anchored
+                    props.CanCollide = object.CanCollide
+                    props.CanTouch = object.CanTouch
+                    props.CanQuery = object.CanQuery
+                    props.Massless = object.Massless
+                    props.CastShadow = object.CastShadow
+                    props.TopSurface = enumName(object.TopSurface)
+                    props.BottomSurface = enumName(object.BottomSurface)
+                    if object:IsA("Part") then props.Shape = enumName(object.Shape) end
+                    if object:IsA("MeshPart") then
+                        pcall(function() props.MeshId = object.MeshId end)
+                        pcall(function() props.TextureID = object.TextureID end)
+                    elseif object:IsA("UnionOperation") then
+                        unsupported.UnionOperation = true
+                    end
+                elseif object:IsA("Attachment") then
+                    props.CFrame = packCFrame(object.CFrame)
+                    props.Axis = packVector3(object.Axis)
+                    props.SecondaryAxis = packVector3(object.SecondaryAxis)
+                elseif object:IsA("SpecialMesh") then
+                    props.MeshType = enumName(object.MeshType)
+                    props.MeshId = object.MeshId
+                    props.TextureId = object.TextureId
+                    props.Scale = packVector3(object.Scale)
+                    props.Offset = packVector3(object.Offset)
+                    props.VertexColor = packVector3(object.VertexColor)
+                elseif object:IsA("Decal") or object:IsA("Texture") then
+                    props.Texture = object.Texture
+                    props.Transparency = object.Transparency
+                    props.Color3 = packColor3(object.Color3)
+                    props.Face = enumName(object.Face)
+                    if object:IsA("Texture") then
+                        props.StudsPerTileU = object.StudsPerTileU
+                        props.StudsPerTileV = object.StudsPerTileV
+                    end
+                elseif object:IsA("Animation") then
+                    props.AnimationId = object.AnimationId
+                elseif object:IsA("SurfaceAppearance") then
+                    pcall(function() props.ColorMap = object.ColorMap end)
+                    pcall(function() props.MetalnessMap = object.MetalnessMap end)
+                    pcall(function() props.NormalMap = object.NormalMap end)
+                    pcall(function() props.RoughnessMap = object.RoughnessMap end)
+                end
+
+                local index = #nodes + 1
+                nodes[index] = node
+                indices[object] = index
+                nextParent = index
+            else
+                unsupported[object.ClassName] = true
+            end
+
+            for _, child in ipairs(object:GetChildren()) do
+                visit(child, nextParent)
+            end
+        end
+
+        visit(model, nil)
+
+        for object, index in pairs(indices) do
+            local node = nodes[index]
+            local props = node.Props
+            if object:IsA("JointInstance") then
+                props.Part0 = indices[object.Part0]
+                props.Part1 = indices[object.Part1]
+                props.C0 = packCFrame(object.C0)
+                props.C1 = packCFrame(object.C1)
+            elseif object:IsA("WeldConstraint") then
+                props.Part0 = indices[object.Part0]
+                props.Part1 = indices[object.Part1]
+            elseif object:IsA("Constraint") then
+                props.Attachment0 = indices[object.Attachment0]
+                props.Attachment1 = indices[object.Attachment1]
+            end
+        end
+
+        local primaryIndex = indices[model.PrimaryPart] or indices[root]
+        local warningNames = {}
+        for className in pairs(unsupported) do warningNames[#warningNames + 1] = className end
+        table.sort(warningNames)
+
+        return {
+            Version = 1,
+            Name = model.Name,
+            RootIndex = indices[root],
+            PrimaryPartIndex = primaryIndex,
+            Nodes = nodes,
+            Animations = animations or {},
+            Unsupported = warningNames
+        }, warningNames
+    end
+
+    local function deserializeModel(data)
+        if type(data) ~= "table" or data.Version ~= 1 or type(data.Nodes) ~= "table" then
+            return nil, "Unsupported or damaged portable entity file"
+        end
+
+        local objects = {}
+        local fallbackMeshes = {}
+
+        for index, node in ipairs(data.Nodes) do
+            local className = tostring(node.Class or "")
+            local isPart = className == "Part" or className == "MeshPart"
+                or className == "UnionOperation" or className == "WedgePart"
+                or className == "CornerWedgePart" or className == "TrussPart"
+                or className == "SpawnLocation" or className == "Seat"
+                or className == "VehicleSeat"
+            local createClass = className
+            local okCreate, object = pcall(function() return Instance.new(createClass) end)
+            if not okCreate or not object then
+                if isPart then
+                    object = Instance.new("Part")
+                    fallbackMeshes[index] = true
+                else
+                    return nil, "This executor cannot recreate the '" .. className .. "' class"
+                end
+            end
+
+            object.Name = tostring(node.Name or className)
+            objects[index] = object
+            local parentIndex = tonumber(node.Parent)
+            if parentIndex and objects[parentIndex] then
+                object.Parent = objects[parentIndex]
+            end
+        end
+
+        local function vectorFrom(value)
+            if type(value) ~= "table" then return Vector3.zero end
+            return Vector3.new(tonumber(value[1]) or 0, tonumber(value[2]) or 0, tonumber(value[3]) or 0)
+        end
+
+        local function colorFrom(value)
+            if type(value) ~= "table" then return Color3.new(1, 1, 1) end
+            return Color3.new(tonumber(value[1]) or 1, tonumber(value[2]) or 1, tonumber(value[3]) or 1)
+        end
+
+        local function cframeFrom(value)
+            if type(value) ~= "table" or #value < 12 then return CFrame.new() end
+            return CFrame.new(table.unpack(value, 1, 12))
+        end
+
+        local function setEnum(object, property, enumType, name)
+            if type(name) ~= "string" then return end
+            pcall(function() object[property] = enumType[name] end)
+        end
+
+        for index, node in ipairs(data.Nodes) do
+            local object = objects[index]
+            local props = node.Props or {}
+            if object:IsA("BasePart") then
+                pcall(function() object.Size = vectorFrom(props.Size) end)
+                pcall(function() object.Color = colorFrom(props.Color) end)
+                pcall(function() object.Transparency = tonumber(props.Transparency) or 0 end)
+                pcall(function() object.Reflectance = tonumber(props.Reflectance) or 0 end)
+                pcall(function() object.Anchored = true end)
+                pcall(function() object.CanCollide = props.CanCollide == true end)
+                pcall(function() object.CanTouch = props.CanTouch == true end)
+                pcall(function() object.CanQuery = props.CanQuery ~= false end)
+                pcall(function() object.Massless = props.Massless == true end)
+                pcall(function() object.CastShadow = props.CastShadow ~= false end)
+                setEnum(object, "Material", Enum.Material, props.Material)
+                setEnum(object, "TopSurface", Enum.SurfaceType, props.TopSurface)
+                setEnum(object, "BottomSurface", Enum.SurfaceType, props.BottomSurface)
+                if object:IsA("Part") then setEnum(object, "Shape", Enum.PartType, props.Shape) end
+
+                local relative = cframeFrom(props.CFrame)
+                pcall(function() object.CFrame = relative end)
+
+                if object:IsA("MeshPart") then
+                    local meshOk = pcall(function()
+                        object.MeshId = props.MeshId or ""
+                        object.TextureID = props.TextureID or ""
+                    end)
+                    if not meshOk and props.MeshId and props.MeshId ~= "" then
+                        fallbackMeshes[index] = true
+                    end
+                elseif fallbackMeshes[index] and props.MeshId and props.MeshId ~= "" then
+                    local mesh = Instance.new("SpecialMesh")
+                    mesh.MeshType = Enum.MeshType.FileMesh
+                    mesh.MeshId = props.MeshId
+                    mesh.TextureId = props.TextureID or ""
+                    mesh.Parent = object
+                end
+            elseif object:IsA("Attachment") then
+                pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
+                pcall(function() object.Axis = vectorFrom(props.Axis) end)
+                pcall(function() object.SecondaryAxis = vectorFrom(props.SecondaryAxis) end)
+            elseif object:IsA("SpecialMesh") then
+                setEnum(object, "MeshType", Enum.MeshType, props.MeshType)
+                pcall(function() object.MeshId = props.MeshId or "" end)
+                pcall(function() object.TextureId = props.TextureId or "" end)
+                pcall(function() object.Scale = vectorFrom(props.Scale) end)
+                pcall(function() object.Offset = vectorFrom(props.Offset) end)
+                pcall(function() object.VertexColor = vectorFrom(props.VertexColor) end)
+            elseif object:IsA("Decal") or object:IsA("Texture") then
+                pcall(function() object.Texture = props.Texture or "" end)
+                pcall(function() object.Transparency = tonumber(props.Transparency) or 0 end)
+                pcall(function() object.Color3 = colorFrom(props.Color3) end)
+                setEnum(object, "Face", Enum.NormalId, props.Face)
+                if object:IsA("Texture") then
+                    pcall(function() object.StudsPerTileU = tonumber(props.StudsPerTileU) or 1 end)
+                    pcall(function() object.StudsPerTileV = tonumber(props.StudsPerTileV) or 1 end)
+                end
+            elseif object:IsA("Animation") then
+                pcall(function() object.AnimationId = props.AnimationId or "" end)
+            elseif object:IsA("SurfaceAppearance") then
+                pcall(function() object.ColorMap = props.ColorMap or "" end)
+                pcall(function() object.MetalnessMap = props.MetalnessMap or "" end)
+                pcall(function() object.NormalMap = props.NormalMap or "" end)
+                pcall(function() object.RoughnessMap = props.RoughnessMap or "" end)
+            end
+        end
+
+        for index, node in ipairs(data.Nodes) do
+            local object = objects[index]
+            local props = node.Props or {}
+            if object:IsA("JointInstance") then
+                pcall(function()
+                    object.Part0 = objects[props.Part0]
+                    object.Part1 = objects[props.Part1]
+                    object.C0 = cframeFrom(props.C0)
+                    object.C1 = cframeFrom(props.C1)
+                end)
+            elseif object:IsA("WeldConstraint") then
+                pcall(function()
+                    object.Part0 = objects[props.Part0]
+                    object.Part1 = objects[props.Part1]
+                end)
+            elseif object:IsA("Constraint") then
+                pcall(function()
+                    object.Attachment0 = objects[props.Attachment0]
+                    object.Attachment1 = objects[props.Attachment1]
+                end)
+            end
+        end
+
+        local model = objects[1]
+        if not model or not model:IsA("Model") then
+            for _, object in ipairs(objects) do
+                if object and object:IsA("Model") then model = object break end
+            end
+        end
+        if not model then
+            for _, object in ipairs(objects) do if object then object:Destroy() end end
+            return nil, "Portable file does not contain a Model"
+        end
+
+        local primary = objects[tonumber(data.PrimaryPartIndex)]
+        if primary and primary:IsA("BasePart") then
+            pcall(function() model.PrimaryPart = primary end)
+        end
+        return model
     end
 
     local function disablePart(part)
@@ -661,7 +979,21 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local info = entry.Info
         if not info or not info.Template or not info.Template:IsA("Model") then
             local captureError
-            info, captureError = captureEntity(entry.Path)
+            if entry.Data then
+                local restoredModel, restoreError = deserializeModel(entry.Data)
+                if not restoredModel then
+                    notify("Entity Import", restoreError, "Error")
+                    return false
+                end
+                info, captureError = captureEntity(entry.Path or entry.Name, restoredModel)
+                restoredModel:Destroy()
+                if info and type(entry.Data.Animations) == "table" then
+                    info.Animations = entry.Data.Animations
+                end
+            else
+                notify("Entity Import", "This is an old path-only entry. Re-import it in the original game to create a portable copy.", "Warn")
+                return false
+            end
             if not info then
                 notify("Entity Import", captureError, "Error")
                 return false
@@ -926,12 +1258,25 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local decodedOk, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
         if not decodedOk or type(decoded) ~= "table" then return end
         for _, item in ipairs(decoded) do
-            if type(item) == "table" and type(item.Path) == "string" and item.Path ~= "" then
-                entries[#entries + 1] = {
-                    Path = item.Path,
-                    Name = tostring(item.Name or item.Path),
-                    Info = nil
-                }
+            if type(item) == "table" then
+                local data = item.Data
+                if type(item.DataFile) == "string" and isfile(item.DataFile) then
+                    local dataOk, dataRaw = pcall(readfile, item.DataFile)
+                    if dataOk and type(dataRaw) == "string" then
+                        local decodeOk, decodedData = pcall(function() return HttpService:JSONDecode(dataRaw) end)
+                        if decodeOk and type(decodedData) == "table" then data = decodedData end
+                    end
+                end
+                if type(item.Name) == "string" then
+                    entries[#entries + 1] = {
+                        Id = tostring(item.Id or HttpService:GenerateGUID(false)),
+                        Path = tostring(item.Path or ""),
+                        Name = item.Name,
+                        Data = type(data) == "table" and data or nil,
+                        DataFile = item.DataFile,
+                        Info = nil
+                    }
+                end
             end
         end
     end
@@ -940,25 +1285,47 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         if type(writefile) ~= "function" then return false end
         local serializable = {}
         for _, item in ipairs(entries) do
-            serializable[#serializable + 1] = {Path = item.Path, Name = item.Name}
+            local saved = {
+                Id = item.Id,
+                Path = item.Path,
+                Name = item.Name
+            }
+            if type(item.Data) == "table" then
+                local dataFile = item.DataFile or ("JustXUniversal_Entity_" .. tostring(item.Id) .. ".json")
+                local dataOk = pcall(function()
+                    writefile(dataFile, HttpService:JSONEncode(item.Data))
+                end)
+                if dataOk then
+                    item.DataFile = dataFile
+                    saved.DataFile = dataFile
+                else
+                    saved.Data = item.Data
+                end
+            elseif item.DataFile then
+                saved.DataFile = item.DataFile
+            end
+            serializable[#serializable + 1] = saved
         end
-        return pcall(function()
+        local ok = pcall(function()
             writefile(CONFIG_FILE, HttpService:JSONEncode(serializable))
         end)
+        return ok
+    end
+
+    local function getEntryLabel(item)
+        return item.Name .. "  [" .. (item.Data and "Portable" or item.Path ~= "" and item.Path or "Missing data") .. "]"
     end
 
     local function getEntryNames()
         local names = {}
-        for _, item in ipairs(entries) do
-            names[#names + 1] = item.Name .. "  [" .. item.Path .. "]"
-        end
+        for _, item in ipairs(entries) do names[#names + 1] = getEntryLabel(item) end
         return names
     end
 
     local function findEntry(option)
         if type(option) ~= "string" then return nil end
         for _, item in ipairs(entries) do
-            if option == item.Name .. "  [" .. item.Path .. "]" then return item end
+            if option == getEntryLabel(item) then return item end
         end
         return nil
     end
@@ -1004,6 +1371,13 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     return
                 end
 
+                local portableData, unsupportedClasses = serializeModel(info.Template, info.Animations)
+                if not portableData then
+                    info.Template:Destroy()
+                    notify("Entity Import", unsupportedClasses, "Error")
+                    return
+                end
+
                 local customName = trim(entityNameInput:Get())
                 local entry = nil
                 for _, saved in ipairs(entries) do
@@ -1016,18 +1390,22 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         pcall(function() entry.Info.Template:Destroy() end)
                     end
                     entry.Info = info
+                    entry.Data = portableData
+                    entry.Id = entry.Id or HttpService:GenerateGUID(false)
                     if customName ~= "" then entry.Name = customName end
                 else
                     entry = {
+                        Id = HttpService:GenerateGUID(false),
                         Path = path,
                         Name = customName ~= "" and customName or info.Name,
-                        Info = info
+                        Info = info,
+                        Data = portableData
                     }
                     entries[#entries + 1] = entry
                 end
 
                 selectedEntry = entry
-                saveConfig()
+                local savedToDisk = saveConfig()
                 refreshDropdown()
                 local found = {}
                 for _, animation in ipairs(info.Animations) do
@@ -1044,6 +1422,13 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         #names > 0 and table.concat(names, ", ") or "none detected"),
                     #names > 0 and "Success" or "Warn"
                 )
+                if not savedToDisk then
+                    notify("Entity Import", "Portable copy is ready for this session, but file saving failed. Check executor file permissions.", "Warn")
+                elseif #unsupportedClasses > 0 then
+                    notify("Entity Import", "Portable copy saved. Some object classes could not be preserved: " .. table.concat(unsupportedClasses, ", "), "Warn")
+                else
+                    notify("Entity Import", "Portable copy saved to device storage. It can now be loaded in other games.", "Success")
+                end
             end)
         end
     })
@@ -1090,6 +1475,9 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
             end
             if selectedEntry.Info and selectedEntry.Info.Template then
                 pcall(function() selectedEntry.Info.Template:Destroy() end)
+            end
+            if selectedEntry.DataFile and type(deletefile) == "function" then
+                pcall(deletefile, selectedEntry.DataFile)
             end
             local deletedName = selectedEntry.Name
             selectedEntry = nil
