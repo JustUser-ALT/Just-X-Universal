@@ -1378,6 +1378,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 meshPart.Color = placeholder.Color
                 meshPart.Transparency = placeholder.Transparency
                 meshPart.Reflectance = placeholder.Reflectance
+                pcall(function() meshPart.TextureID = props.TextureID or "" end)
                 meshPart.Anchored = true
                 meshPart.CanCollide = placeholder.CanCollide
                 meshPart.CanTouch = placeholder.CanTouch
