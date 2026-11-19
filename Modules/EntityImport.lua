@@ -15,7 +15,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local RESOLVE_TIMEOUT = 3
     local SAMPLE_TIME = 2
     local VISUAL_LIFT = 15
-    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-01"
+    local DIAGNOSTIC_BUILD = "ENTITY-DIAG-02"
     local diagnosticLabel
     local diagnostic = {
         State = "Waiting for entity",
@@ -647,9 +647,17 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     if object:IsA("MeshPart") then
                         pcall(function() props.MeshId = object.MeshId end)
                         pcall(function() props.TextureID = object.TextureID end)
+                        pcall(function() props.RenderFidelity = enumName(object.RenderFidelity) end)
+                        pcall(function() props.CollisionFidelity = enumName(object.CollisionFidelity) end)
+                        pcall(function() props.DoubleSided = object.DoubleSided end)
                     elseif object:IsA("UnionOperation") then
                         unsupported.UnionOperation = true
                     end
+                elseif object:IsA("Bone") then
+                    props.CFrame = packCFrame(object.CFrame)
+                    props.Transform = packCFrame(object.Transform)
+                    props.Axis = packVector3(object.Axis)
+                    props.SecondaryAxis = packVector3(object.SecondaryAxis)
                 elseif object:IsA("Attachment") then
                     props.CFrame = packCFrame(object.CFrame)
                     props.Axis = packVector3(object.Axis)
@@ -724,12 +732,17 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 props.Part1 = indices[object.Part1]
                 props.C0 = packCFrame(object.C0)
                 props.C1 = packCFrame(object.C1)
+                pcall(function() props.Enabled = object.Enabled end)
+                if object:IsA("Motor6D") then
+                    pcall(function() props.Transform = packCFrame(object.Transform) end)
+                end
             elseif object:IsA("WeldConstraint") then
                 props.Part0 = indices[object.Part0]
                 props.Part1 = indices[object.Part1]
             elseif object:IsA("Constraint") then
                 props.Attachment0 = indices[object.Attachment0]
                 props.Attachment1 = indices[object.Attachment1]
+                pcall(function() props.Enabled = object.Enabled end)
             end
         end
 
@@ -739,7 +752,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         table.sort(warningNames)
 
         return {
-            Version = 1,
+            Version = 2,
             Name = model.Name,
             RootIndex = indices[root],
             PrimaryPartIndex = primaryIndex,
@@ -750,7 +763,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     end
 
     local function deserializeModel(data)
-        if type(data) ~= "table" or data.Version ~= 1 or type(data.Nodes) ~= "table" then
+        if type(data) ~= "table" or (data.Version ~= 1 and data.Version ~= 2) or type(data.Nodes) ~= "table" then
             return nil, "Unsupported or damaged portable entity file"
         end
 
@@ -864,6 +877,13 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                         mesh.TextureId = props.TextureID or ""
                         mesh.Parent = object
                     end
+                    setEnum(object, "RenderFidelity", Enum.RenderFidelity, props.RenderFidelity)
+                    setEnum(object, "CollisionFidelity", Enum.CollisionFidelity, props.CollisionFidelity)
+                    pcall(function() object.DoubleSided = props.DoubleSided == true end)
+                    -- MeshId assignment can reset the mesh's dimensions; apply the saved
+                    -- size and local transform only after the mesh asset is restored.
+                    pcall(function() object.Size = vectorFrom(props.Size) end)
+                    pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
                 elseif fallbackMeshes[index] and props.MeshId and props.MeshId ~= "" then
                     local mesh = Instance.new("SpecialMesh")
                     mesh.MeshType = Enum.MeshType.FileMesh
@@ -871,6 +891,11 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     mesh.TextureId = props.TextureID or ""
                     mesh.Parent = object
                 end
+            elseif object:IsA("Bone") then
+                pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
+                pcall(function() object.Transform = cframeFrom(props.Transform) end)
+                pcall(function() object.Axis = vectorFrom(props.Axis) end)
+                pcall(function() object.SecondaryAxis = vectorFrom(props.SecondaryAxis) end)
             elseif object:IsA("Attachment") then
                 pcall(function() object.CFrame = cframeFrom(props.CFrame) end)
                 pcall(function() object.Axis = vectorFrom(props.Axis) end)
@@ -932,16 +957,22 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     object.Part1 = objects[props.Part1]
                     object.C0 = cframeFrom(props.C0)
                     object.C1 = cframeFrom(props.C1)
+                    if props.Enabled ~= nil then object.Enabled = props.Enabled end
+                    if object:IsA("Motor6D") and props.Transform then
+                        object.Transform = cframeFrom(props.Transform)
+                    end
                 end)
             elseif object:IsA("WeldConstraint") then
                 pcall(function()
                     object.Part0 = objects[props.Part0]
                     object.Part1 = objects[props.Part1]
+                    if props.Enabled ~= nil then object.Enabled = props.Enabled end
                 end)
             elseif object:IsA("Constraint") then
                 pcall(function()
                     object.Attachment0 = objects[props.Attachment0]
                     object.Attachment1 = objects[props.Attachment1]
+                    if props.Enabled ~= nil then object.Enabled = props.Enabled end
                 end)
             end
         end
