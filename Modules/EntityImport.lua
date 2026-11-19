@@ -751,15 +751,14 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         floorRayParams.IgnoreWater = true
 
         local function getFloorY(currentRoot)
-            if humanoid.FloorMaterial ~= Enum.Material.Air then
-                local rayLength = math.max(getPlayerFloorOffset(humanoid, currentRoot) + 8, 12)
-                local result = Workspace:Raycast(
-                    currentRoot.Position,
-                    Vector3.new(0, -rayLength, 0),
-                    floorRayParams
-                )
-                if result then return result.Position.Y end
-            end
+            local rayOrigin = currentRoot.Position + Vector3.new(0, 2, 0)
+            local rayLength = math.max(getPlayerFloorOffset(humanoid, currentRoot) + 32, 64)
+            local result = Workspace:Raycast(
+                rayOrigin,
+                Vector3.new(0, -rayLength, 0),
+                floorRayParams
+            )
+            if result then return result.Position.Y end
             return currentRoot.Position.Y - getPlayerFloorOffset(humanoid, currentRoot)
         end
 
@@ -804,6 +803,14 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 stopEntity()
                 return
             end
+
+            -- The default Roblox camera transparency controller can overwrite
+            -- LocalTransparencyModifier when switching between first and third person.
+            -- Reapply the local hide while this entity preview is active.
+            for _, object in ipairs(character:GetDescendants()) do
+                hideCharacterObject(object, character)
+            end
+
             if not model.Parent or not root.Parent then
                 stopEntity()
                 notify("Entity Import", "The game removed the local entity clone; your original character was restored.", "Warn")
