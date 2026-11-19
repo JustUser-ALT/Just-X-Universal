@@ -16,7 +16,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
     local DEFAULTS = {
         ScaleMode = "Fit",
         MovementMode = "Auto",
-        RunThreshold = 0.75
+        RunThreshold = 0.9
     }
 
     local entries = {}
@@ -554,7 +554,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         elseif state == Enum.HumanoidStateType.Freefall then
             wanted = "fall"
         elseif speed > 0.5 then
-            local threshold = math.max(10, humanoid.WalkSpeed * DEFAULTS.RunThreshold)
+            local threshold = math.max(17, humanoid.WalkSpeed * DEFAULTS.RunThreshold)
             if movementMode == "Auto" and runtime.Slots.run and speed >= threshold then
                 wanted = "run"
             else
