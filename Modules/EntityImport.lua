@@ -127,7 +127,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         for _, player in ipairs(Players:GetPlayers()) do
             local character = player.Character
             if character and (source == character or source:IsDescendantOf(character)) then
-                return true, player.Name
+                return true, player.Name, character
             end
         end
         return false
@@ -259,10 +259,13 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         end
         if not source then return nil, resolveError end
 
-        local isPlayerCharacter, playerName = isPlayerCharacterSource(source)
+        local isPlayerCharacter, playerName, playerCharacter = isPlayerCharacterSource(source)
         if isPlayerCharacter then
-            return nil, "The selected path points to player character '" .. playerName
-                .. "'. Entity Import only accepts NPCs or other models, not player characters."
+            if playerName ~= LocalPlayer.Name then
+                return nil, "Importing another player's character is disabled. You can import only your own character."
+            end
+            -- A path to any part inside our character should capture the complete character model.
+            source = playerCharacter
         end
 
         local sourceIsPart = source:IsA("BasePart")
@@ -401,6 +404,8 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         Model = true, Folder = true, Accessory = true, Tool = true,
         Attachment = true, Bone = true, SpecialMesh = true,
         Decal = true, Texture = true, SurfaceAppearance = true,
+        BodyColors = true, Shirt = true, Pants = true, ShirtGraphic = true,
+        CharacterMesh = true,
         Animation = true, Motor6D = true, Weld = true,
         WeldConstraint = true, ManualWeld = true, Snap = true,
         HingeConstraint = true, BallSocketConstraint = true,
@@ -498,6 +503,24 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                     pcall(function() props.MetalnessMap = object.MetalnessMap end)
                     pcall(function() props.NormalMap = object.NormalMap end)
                     pcall(function() props.RoughnessMap = object.RoughnessMap end)
+                elseif object:IsA("BodyColors") then
+                    props.HeadColor = packColor3(object.HeadColor3)
+                    props.TorsoColor = packColor3(object.TorsoColor3)
+                    props.LeftArmColor = packColor3(object.LeftArmColor3)
+                    props.RightArmColor = packColor3(object.RightArmColor3)
+                    props.LeftLegColor = packColor3(object.LeftLegColor3)
+                    props.RightLegColor = packColor3(object.RightLegColor3)
+                elseif object:IsA("Shirt") then
+                    props.ShirtTemplate = object.ShirtTemplate
+                elseif object:IsA("Pants") then
+                    props.PantsTemplate = object.PantsTemplate
+                elseif object:IsA("ShirtGraphic") then
+                    props.Graphic = object.Graphic
+                elseif object:IsA("CharacterMesh") then
+                    props.BodyPart = enumName(object.BodyPart)
+                    props.MeshId = object.MeshId
+                    props.BaseTextureId = object.BaseTextureId
+                    props.OverlayTextureId = object.OverlayTextureId
                 end
 
                 local index = #nodes + 1
@@ -671,6 +694,24 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 pcall(function() object.MetalnessMap = props.MetalnessMap or "" end)
                 pcall(function() object.NormalMap = props.NormalMap or "" end)
                 pcall(function() object.RoughnessMap = props.RoughnessMap or "" end)
+            elseif object:IsA("BodyColors") then
+                pcall(function() object.HeadColor3 = colorFrom(props.HeadColor) end)
+                pcall(function() object.TorsoColor3 = colorFrom(props.TorsoColor) end)
+                pcall(function() object.LeftArmColor3 = colorFrom(props.LeftArmColor) end)
+                pcall(function() object.RightArmColor3 = colorFrom(props.RightArmColor) end)
+                pcall(function() object.LeftLegColor3 = colorFrom(props.LeftLegColor) end)
+                pcall(function() object.RightLegColor3 = colorFrom(props.RightLegColor) end)
+            elseif object:IsA("Shirt") then
+                pcall(function() object.ShirtTemplate = props.ShirtTemplate or "" end)
+            elseif object:IsA("Pants") then
+                pcall(function() object.PantsTemplate = props.PantsTemplate or "" end)
+            elseif object:IsA("ShirtGraphic") then
+                pcall(function() object.Graphic = props.Graphic or "" end)
+            elseif object:IsA("CharacterMesh") then
+                setEnum(object, "BodyPart", Enum.BodyPart, props.BodyPart)
+                pcall(function() object.MeshId = props.MeshId or "" end)
+                pcall(function() object.BaseTextureId = props.BaseTextureId or "" end)
+                pcall(function() object.OverlayTextureId = props.OverlayTextureId or "" end)
             end
         end
 
