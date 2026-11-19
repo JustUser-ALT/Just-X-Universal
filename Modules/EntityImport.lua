@@ -252,6 +252,28 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         }
     end
 
+    local function createAvatarDescriptionModel(description, rigType)
+        local verification
+        pcall(function()
+            verification = Enum.AssetTypeVerification.ClientOnly
+        end)
+
+        local okCreate, modelOrError = pcall(function()
+            if verification then
+                return Players:CreateHumanoidModelFromDescriptionAsync(description, rigType, verification)
+            end
+            return Players:CreateHumanoidModelFromDescriptionAsync(description, rigType)
+        end)
+        if okCreate and modelOrError then return modelOrError end
+
+        local fallbackOk, fallbackModel = pcall(function()
+            return Players:CreateHumanoidModelFromDescription(description, rigType)
+        end)
+        if fallbackOk and fallbackModel then return fallbackModel end
+
+        error(tostring(modelOrError) .. " | Fallback: " .. tostring(fallbackModel))
+    end
+
     local function captureEntity(path, sourceOverride)
         local source, resolveError
         if sourceOverride then
@@ -262,17 +284,51 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         if not source then return nil, resolveError end
 
         local isPlayerCharacter, playerName, playerCharacter = isPlayerCharacterSource(source)
+        local animationSource = source
+        local sourceName = source.Name
+        local generatedAvatarModel
+
         if isPlayerCharacter then
             if playerName ~= LocalPlayer.Name then
                 return nil, "Importing another player's character is disabled. You can import only your own character."
             end
-            -- A path to any part inside our character should capture the complete character model.
-            source = playerCharacter
+
+            -- Use the same HumanoidDescription-based avatar generation as Skin Changer.
+            -- The original character remains the animation source; the generated model
+            -- becomes the portable visual template.
+            animationSource = playerCharacter
+            sourceName = playerCharacter.Name
+            local sourceHumanoid = playerCharacter:FindFirstChildOfClass("Humanoid")
+            if not sourceHumanoid then
+                return nil, "Your character has no Humanoid for HumanoidDescription capture."
+            end
+
+            local description
+            local okDescription, descriptionOrError = pcall(function()
+                return sourceHumanoid:GetAppliedDescription()
+            end)
+            if not okDescription or not descriptionOrError then
+                return nil, "Could not read your avatar HumanoidDescription: " .. tostring(descriptionOrError)
+            end
+            description = descriptionOrError
+
+            local okGenerate, generatedOrError = pcall(function()
+                return createAvatarDescriptionModel(description, sourceHumanoid.RigType)
+            end)
+            pcall(function() description:Destroy() end)
+            if not okGenerate or not generatedOrError or not generatedOrError:IsA("Model") then
+                return nil, "Could not generate an avatar copy from HumanoidDescription: " .. tostring(generatedOrError)
+            end
+
+            generatedAvatarModel = generatedOrError
+            generatedAvatarModel.Name = sourceName
+            source = generatedAvatarModel
         end
 
         local sourceIsPart = source:IsA("BasePart")
         local sourceIsContainer = source:IsA("Folder") or source:IsA("Accessory") or source:IsA("Tool")
         if not source:IsA("Model") and not sourceIsPart and not sourceIsContainer then
+            if generatedAvatarModel then generatedAvatarModel:Destroy() end
             return nil, source:GetFullName() .. " is a " .. source.ClassName .. "; expected a Model, Folder, Accessory, Tool, or BasePart"
         end
 
@@ -289,6 +345,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
 
         local okClone, clone = pcall(function() return source:Clone() end)
         for _, object in ipairs(unlocked) do pcall(function() object.Archivable = false end) end
+        if generatedAvatarModel then generatedAvatarModel:Destroy() end
         if not okClone or not clone then
             return nil, "Clone() failed: " .. tostring(clone)
         end
@@ -304,7 +361,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         local info = {
             Template = clone,
             Path = path,
-            Name = source.Name,
+            Name = sourceName,
             Animations = {},
             Warnings = {},
             PartCount = 0,
@@ -320,7 +377,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
         end
 
         local sourceAnimators = {}
-        for _, object in ipairs(source:GetDescendants()) do
+        for _, object in ipairs(animationSource:GetDescendants()) do
             if object:IsA("Animator") then sourceAnimators[#sourceAnimators + 1] = object end
         end
 
@@ -346,7 +403,7 @@ return function(SkinSection, JL, clearSkinPreview, onEntityStart)
                 end
             end
             task.wait(0.15)
-        until os.clock() >= sampleDeadline or not source.Parent
+        until os.clock() >= sampleDeadline or not animationSource.Parent
 
         local toDestroy = {}
         for _, object in ipairs(clone:GetDescendants()) do
