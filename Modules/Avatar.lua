@@ -1105,6 +1105,7 @@ return function(Window, JL)
             if not ok then error(result) end
             return result
         end
+        if skinApplyBaseMap then return table.clone(skinApplyBaseMap) end
         return getCurrentCharacterAnimationMap()
     end
 
@@ -1153,7 +1154,7 @@ return function(Window, JL)
         rebuildSkinAnimationApply()
     end
 
-    local SkinPreview, skinPreviewTab, skinPreviewAsset, skinAnimationsPage
+    local SkinPreview, skinPreviewTab, skinPreviewAsset, skinAnimationsPage, skinPreviewSourceModel
 
     local function previewButton(parent, text, position, size)
         local button = Instance.new("TextButton")
@@ -1250,20 +1251,6 @@ return function(Window, JL)
             end)
         end
 
-        local bundle = previewButton(parent, skinApplyBundle and "✓ Apply Bundle" or "+ Apply Bundle",
-            UDim2.new(0, 8, 1, -36), UDim2.new(1, -16, 0, 28))
-        bundle.Activated:Connect(function()
-            if not alive then return end
-            local nextValue = not skinApplyBundle
-            if nextValue then
-                local ok, result = pcall(resolveSelectedSkinAnimationMap, asset.SkinData)
-                if not ok then status.Text = "Animation source error: " .. tostring(result); return end
-                skinApplyMap = result
-            end
-            setSkinAnimationApply("Bundle", nextValue)
-            bundle.Text = nextValue and "✓ Apply Bundle" or "+ Apply Bundle"
-        end)
-
         task.spawn(function()
             local ok, result = pcall(function()
                 local description = skinDataToDescription(asset.SkinData)
@@ -1337,6 +1324,8 @@ return function(Window, JL)
             end
             if not SkinPreview or not SkinPreview.alive then pcall(function() modelOrError:Destroy() end); return end
             local okMap, map = pcall(resolveSelectedSkinAnimationMap, skin.Data)
+            if skinPreviewSourceModel then pcall(function() skinPreviewSourceModel:Destroy() end) end
+            skinPreviewSourceModel = modelOrError
             skinPreviewAsset:Update({
                 Name = skin.Name,
                 Type = "Avatar",
@@ -1345,7 +1334,11 @@ return function(Window, JL)
                 SkinData = skin.Data,
                 AnimationMap = okMap and map or {}
             })
-            SkinPreview:Open({Asset = skinPreviewAsset, Page = skinAnimationsPage})
+            if okMap and skinApplyActive() then
+                skinApplyMap = map
+                rebuildSkinAnimationApply()
+            end
+            SkinPreview:Open({Asset = skinPreviewAsset, Page = skinAnimationsPage.id})
         end)
     end
 
@@ -2074,12 +2067,18 @@ if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin resto
         Flag = "JXU_SkinApplyBundle",
         Callback = function(value)
             if value and selectedSkin then
-                local ok, map = pcall(resolveSelectedSkinAnimationMap, selectedSkin.Data)
-                if not ok then
-                    if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Could not resolve animations: " .. tostring(map), Type = "Error", Duration = 5}) end
-                    return
+                local map
+                if skinPreviewAsset and skinPreviewAsset.SkinData == selectedSkin.Data then
+                    map = skinPreviewAsset.AnimationMap
+                else
+                    local ok, result = pcall(resolveSelectedSkinAnimationMap, selectedSkin.Data)
+                    if not ok then
+                        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Could not resolve animations: " .. tostring(result), Type = "Error", Duration = 5}) end
+                        return
+                    end
+                    map = result
                 end
-                skinApplyMap = map
+                skinApplyMap = type(map) == "table" and map or {}
             end
             setSkinAnimationApply("Bundle", value == true)
         end
