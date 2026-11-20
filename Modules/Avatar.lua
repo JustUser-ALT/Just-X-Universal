@@ -32,6 +32,10 @@ return function(Window, JL)
     local activeAnimationMap = {}
     local originalAnimationIds = setmetatable({}, {__mode = "k"})
     local managedAnimationIds = {}
+    local skinApplyBaseMap, skinApplyBundle, skinApplySlots, skinApplyMap, rebuildSkinAnimationApply
+    skinApplyBundle = false
+    skinApplySlots = {}
+    skinApplyMap = {}
     local animationApplyQueued = false
     local animationRestartRequested = false
     local ANIMATION_CONFIG = "JustXUniversal_AnimationPacks.json"
@@ -376,15 +380,26 @@ return function(Window, JL)
         local character = LocalPlayer.Character
         local animate = character and character:FindFirstChild("Animate")
         if animate then captureOriginalAnimationIds(animate) end
-        activeAnimationMap = resolved.Animations
-        queueAnimationReapply(true)
+        if skinApplyBaseMap then
+            skinApplyBaseMap = table.clone(resolved.Animations)
+            rebuildSkinAnimationApply()
+        else
+            activeAnimationMap = resolved.Animations
+            queueAnimationReapply(true)
+        end
         if JL.Notify then
             JL:Notify({Title = "Animation Bundles", Desc = "Applied " .. resolved.Name .. " (" .. resolved.Source .. ")", Type = "Success", Duration = 4}) end
     end
     
     local function resetAnimationPack()
-        activeAnimationMap = {}
-        local changed = applyAnimationMap(true)
+        if skinApplyBaseMap then
+            skinApplyBaseMap = {}
+            rebuildSkinAnimationApply()
+        else
+            activeAnimationMap = {}
+            applyAnimationMap(true)
+        end
+        local changed = true
         if JL.Notify then
             JL:Notify({
                 Title = "Animation Bundles",
@@ -1066,6 +1081,274 @@ return function(Window, JL)
         return result
     end
     
+
+    local function getCurrentCharacterAnimationMap()
+        local character = LocalPlayer.Character
+        local animate = character and character:FindFirstChild("Animate")
+        if not animate then error("Current character Animate script is unavailable") end
+        local result = {}
+        for _, object in ipairs(animate:GetDescendants()) do
+            if object:IsA("Animation") and object.AnimationId ~= "" then
+                local slot = findAnimationTargetSlot(object)
+                if slot then result[slot] = object.AnimationId:gsub("^rbxassetid://", "") end
+            end
+        end
+        if not next(result) then error("No current character animation IDs were found") end
+        return result
+    end
+
+    local function resolveSelectedSkinAnimationMap(data)
+        if skinLoadAnimations then
+            local description = skinDataToDescription(data)
+            local ok, result = pcall(resolveSkinAnimationMap, description)
+            pcall(function() description:Destroy() end)
+            if not ok then error(result) end
+            return result
+        end
+        return getCurrentCharacterAnimationMap()
+    end
+
+    local skinAnimationTypes = {
+        {Name = "Idle", Slots = {"idle1", "idle2", "idle"}},
+        {Name = "Walk", Slots = {"walk"}},
+        {Name = "Run", Slots = {"run"}},
+        {Name = "Jump", Slots = {"jump"}},
+        {Name = "Fall", Slots = {"fall"}},
+        {Name = "Climb", Slots = {"climb"}},
+        {Name = "Swim", Slots = {"swim", "swimidle"}}
+    }
+
+    local function skinApplyActive()
+        if skinApplyBundle then return true end
+        for _, enabled in pairs(skinApplySlots) do if enabled then return true end end
+        return false
+    end
+
+    rebuildSkinAnimationApply = function()
+        if not skinApplyActive() then
+            if skinApplyBaseMap then
+                activeAnimationMap = table.clone(skinApplyBaseMap)
+                skinApplyBaseMap = nil
+                queueAnimationReapply(true)
+            end
+            return
+        end
+        local result = table.clone(skinApplyBaseMap or activeAnimationMap)
+        if skinApplyBundle then
+            for slot, id in pairs(skinApplyMap) do result[slot] = id end
+        end
+        for _, group in ipairs(skinAnimationTypes) do
+            if skinApplySlots[group.Name] then
+                for _, slot in ipairs(group.Slots) do result[slot] = skinApplyMap[slot] end
+            end
+        end
+        activeAnimationMap = result
+        queueAnimationReapply(true)
+    end
+
+    local function setSkinAnimationApply(kind, enabled)
+        if enabled and not skinApplyBaseMap then skinApplyBaseMap = table.clone(activeAnimationMap) end
+        if kind == "Bundle" then skinApplyBundle = enabled == true
+        else skinApplySlots[kind] = enabled == true end
+        rebuildSkinAnimationApply()
+    end
+
+    local SkinPreview, skinPreviewTab, skinPreviewAsset, skinAnimationsPage
+
+    local function previewButton(parent, text, position, size)
+        local button = Instance.new("TextButton")
+        button.Position = position
+        button.Size = size
+        button.BackgroundColor3 = Color3.fromRGB(43, 46, 56)
+        button.BorderSizePixel = 0
+        button.AutoButtonColor = true
+        button.Font = Enum.Font.GothamMedium
+        button.TextSize = 12
+        button.TextColor3 = Color3.fromRGB(245, 245, 248)
+        button.Text = text
+        button.Parent = parent
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 7)
+        corner.Parent = button
+        return button
+    end
+
+    local function buildSkinAnimationsPage(parent, asset)
+        local alive, track, animation, model = true, nil, nil, nil
+        local map = type(asset.AnimationMap) == "table" and asset.AnimationMap or {}
+        local status = Instance.new("TextLabel")
+        status.BackgroundTransparency = 1
+        status.Position = UDim2.fromOffset(8, 4)
+        status.Size = UDim2.new(1, -16, 0, 20)
+        status.Font = Enum.Font.Gotham
+        status.TextSize = 11
+        status.TextColor3 = Color3.fromRGB(180, 185, 198)
+        status.TextXAlignment = Enum.TextXAlignment.Left
+        status.Text = "Choose an animation to preview"
+        status.Parent = parent
+
+        local viewport = Instance.new("ViewportFrame")
+        viewport.Position = UDim2.fromOffset(8, 28)
+        viewport.Size = UDim2.new(1, -16, 0, 205)
+        viewport.BackgroundColor3 = Color3.fromRGB(24, 26, 32)
+        viewport.BorderSizePixel = 0
+        viewport.Parent = parent
+        local world = Instance.new("WorldModel")
+        world.Parent = viewport
+        local camera = Instance.new("Camera")
+        camera.FieldOfView = 35
+        camera.Parent = viewport
+        viewport.CurrentCamera = camera
+
+        local function stopTrack()
+            if track then pcall(function() track:Stop(0.12) end); pcall(function() track:Destroy() end); track = nil end
+            if animation then pcall(function() animation:Destroy() end); animation = nil end
+        end
+        local function getId(name)
+            if name == "Idle" then return map.idle1 or map.idle2 or map.idle end
+            if name == "Swim" then return map.swim or map.swimidle end
+            return map[string.lower(name)]
+        end
+        local function play(name)
+            stopTrack()
+            local id = getId(name)
+            local humanoid = model and model:FindFirstChildOfClass("Humanoid")
+            local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+            if not id or not animator then status.Text = name .. " animation is unavailable"; return end
+            animation = Instance.new("Animation")
+            animation.AnimationId = "rbxassetid://" .. tostring(id):gsub("^rbxassetid://", "")
+            local ok, result = pcall(function() return animator:LoadAnimation(animation) end)
+            if not ok or not result then status.Text = "Could not load " .. name; stopTrack(); return end
+            track = result
+            track.Looped = true
+            pcall(function() track.Priority = Enum.AnimationPriority.Action end)
+            track:Play(0.15)
+            status.Text = "Playing " .. name
+        end
+
+        local names = {"Idle", "Walk", "Run", "Jump", "Fall", "Climb", "Swim"}
+        for index, name in ipairs(names) do
+            local row, col = math.floor((index - 1) / 2), (index - 1) % 2
+            local x = col == 0 and 8 or 0.51
+            local preview = previewButton(parent, name,
+                UDim2.new(x, col == 0 and 0 or 4, 0, 241 + row * 62),
+                UDim2.new(0.49, -10, 0, 27))
+            preview.Activated:Connect(function() if alive then play(name) end end)
+            local apply = previewButton(parent, skinApplySlots[name] and "✓ Applied " .. name or "+ Apply " .. name,
+                UDim2.new(x, col == 0 and 0 or 4, 0, 271 + row * 62),
+                UDim2.new(0.49, -10, 0, 27))
+            apply.Activated:Connect(function()
+                if not alive then return end
+                local nextValue = not skinApplySlots[name]
+                if nextValue then
+                    local ok, result = pcall(resolveSelectedSkinAnimationMap, asset.SkinData)
+                    if not ok then status.Text = "Animation source error: " .. tostring(result); return end
+                    skinApplyMap = result
+                end
+                setSkinAnimationApply(name, nextValue)
+                apply.Text = nextValue and "✓ Applied " .. name or "+ Apply " .. name
+            end)
+        end
+
+        local bundle = previewButton(parent, skinApplyBundle and "✓ Apply Bundle" or "+ Apply Bundle",
+            UDim2.new(0, 8, 1, -36), UDim2.new(1, -16, 0, 28))
+        bundle.Activated:Connect(function()
+            if not alive then return end
+            local nextValue = not skinApplyBundle
+            if nextValue then
+                local ok, result = pcall(resolveSelectedSkinAnimationMap, asset.SkinData)
+                if not ok then status.Text = "Animation source error: " .. tostring(result); return end
+                skinApplyMap = result
+            end
+            setSkinAnimationApply("Bundle", nextValue)
+            bundle.Text = nextValue and "✓ Apply Bundle" or "+ Apply Bundle"
+        end)
+
+        task.spawn(function()
+            local ok, result = pcall(function()
+                local description = skinDataToDescription(asset.SkinData)
+                local rigType = asset.SkinData.RigType == "R6" and Enum.HumanoidRigType.R6 or Enum.HumanoidRigType.R15
+                local created = createSkinHumanoidModel(description, rigType)
+                pcall(function() description:Destroy() end)
+                return created
+            end)
+            if not alive then if ok and result then pcall(function() result:Destroy() end) end; return end
+            if not ok or not result then status.Text = "Could not create preview model"; return end
+            model = result
+            for _, object in ipairs(model:GetDescendants()) do
+                if object:IsA("BasePart") then
+                    object.CanCollide, object.CanTouch, object.CanQuery = false, false, false
+                    object.Anchored = object.Name == "HumanoidRootPart"
+                elseif object:IsA("Script") or object:IsA("LocalScript") then
+                    object.Disabled = true
+                end
+            end
+            model.Parent = world
+            local cf, size = model:GetBoundingBox()
+            model:PivotTo(CFrame.new(-cf.Position))
+            local center = Vector3.new(0, size.Y * 0.45, 0)
+            local distance = math.max(size.Magnitude * 0.65, 4)
+            camera.CFrame = CFrame.lookAt(center + Vector3.new(distance * 0.3, distance * 0.16, distance), center)
+            play("Idle")
+        end)
+
+        return function()
+            alive = false
+            stopTrack()
+            if model then pcall(function() model:Destroy() end) end
+            pcall(function() viewport:Destroy() end)
+        end
+    end
+
+    local function ensureSkinPreview()
+        if SkinPreview and SkinPreview.alive then return end
+        SkinPreview = JL:Preview({Title = "Skin Preview", Icon = "user-round"})
+        if not SkinPreview or SkinPreview.IsStub then return end
+        skinPreviewTab = SkinPreview:Tab({Name = "Saved Skins", Icon = "user-round"})
+        skinPreviewAsset = skinPreviewTab:Asset({
+            Name = "Select a skin",
+            Type = "Avatar",
+            Preview = false,
+            Description = "Saved skin preview"
+        })
+        skinAnimationsPage = SkinPreview:Page({
+            Name = "Animations",
+            Icon = "activity",
+            Visible = function(asset) return asset and asset.SkinData ~= nil end,
+            Build = buildSkinAnimationsPage
+        })
+    end
+
+    local function openSavedSkinPreview(skin)
+        if not skin or type(skin.Data) ~= "table" then return end
+        ensureSkinPreview()
+        if not SkinPreview or SkinPreview.IsStub or not skinPreviewAsset then return end
+        task.spawn(function()
+            local ok, modelOrError = pcall(function()
+                local description = skinDataToDescription(skin.Data)
+                local rigType = skin.Data.RigType == "R6" and Enum.HumanoidRigType.R6 or Enum.HumanoidRigType.R15
+                local created = createSkinHumanoidModel(description, rigType)
+                pcall(function() description:Destroy() end)
+                return created
+            end)
+            if not ok or not modelOrError then
+                if JL.Notify then JL:Notify({Title = "Skin Preview", Desc = "Could not create preview: " .. tostring(modelOrError), Type = "Error", Duration = 5}) end
+                return
+            end
+            if not SkinPreview or not SkinPreview.alive then pcall(function() modelOrError:Destroy() end); return end
+            local okMap, map = pcall(resolveSelectedSkinAnimationMap, skin.Data)
+            skinPreviewAsset:Update({
+                Name = skin.Name,
+                Type = "Avatar",
+                Description = "Saved skin preview",
+                Model = modelOrError,
+                SkinData = skin.Data,
+                AnimationMap = okMap and map or {}
+            })
+            SkinPreview:Open({Asset = skinPreviewAsset, Page = skinAnimationsPage})
+        end)
+    end
+
     local function applySkinAccessoryRefinements(model, data)
         local refinements = type(data.AccessoryRefinements) == "table" and data.AccessoryRefinements or {}
         local rigData = type(data.AccessoryRigData) == "table" and data.AccessoryRigData or {}
@@ -1780,9 +2063,28 @@ if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin resto
             else
                 selectedSkin = findSkinByOption(value)
             end
+            if selectedSkin then openSavedSkinPreview(selectedSkin) end
         end
     })
     
+    SkinSection:Toggle({
+        Name = "Apply Bundle",
+        Default = false,
+        Pinned = true,
+        Flag = "JXU_SkinApplyBundle",
+        Callback = function(value)
+            if value and selectedSkin then
+                local ok, map = pcall(resolveSelectedSkinAnimationMap, selectedSkin.Data)
+                if not ok then
+                    if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Could not resolve animations: " .. tostring(map), Type = "Error", Duration = 5}) end
+                    return
+                end
+                skinApplyMap = map
+            end
+            setSkinAnimationApply("Bundle", value == true)
+        end
+    })
+
     SkinSection:Button({
         Name = "Load Skin",
         Callback = loadSelectedSkin
