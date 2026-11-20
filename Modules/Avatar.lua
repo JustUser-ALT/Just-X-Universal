@@ -1153,7 +1153,10 @@ return function(Window, JL)
     end
 
     local function setSkinAnimationApply(kind, enabled)
-        if enabled and not skinApplyBaseMap then skinApplyBaseMap = table.clone(activeAnimationMap) end
+        if enabled and not skinApplyBaseMap then
+            local ok, currentMap = pcall(getCurrentCharacterAnimationMap)
+            skinApplyBaseMap = ok and currentMap or table.clone(activeAnimationMap)
+        end
         if kind == "Bundle" then skinApplyBundle = enabled == true
         else skinApplySlots[kind] = enabled == true end
         rebuildSkinAnimationApply()
