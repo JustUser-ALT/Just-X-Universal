@@ -1714,7 +1714,6 @@ return function(Window, JL)
     end
     
     local function resetSkin()
-        pcall(stopEntityPreview)
         if not originalSkinData then
             local okOriginal, description = pcall(getCurrentHumanoidDescription)
             if okOriginal then
