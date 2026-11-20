@@ -1247,7 +1247,6 @@ return function(Window, JL)
     local skinAnimationCleanup
     local skinPreviewHiddenInFirstPerson = false
     local previousSkinAnimationMap
-    local stopEntityPreview = function() end
     
     local function disconnectSkinPreviewConnections()
         for name, connection in pairs(skinPreviewConnections) do
@@ -1510,7 +1509,6 @@ return function(Window, JL)
     end
     
     local function buildLocalSkinPreview(data)
-        pcall(stopEntityPreview)
         if type(data) ~= "table" or type(data.Properties) ~= "table" then
             error("Saved skin data is invalid")
         end
@@ -1831,35 +1829,6 @@ return function(Window, JL)
         Callback = resetSkin
     })
 
-    local function prepareForEntityPreview()
-        activeSkinData = nil
-        if previousSkinAnimationMap ~= nil then
-            activeAnimationMap = previousSkinAnimationMap
-            previousSkinAnimationMap = nil
-            queueAnimationReapply(true)
-        end
-    end
-
-    local ENTITY_IMPORT_MODULE_URL = "https://raw.githubusercontent.com/JustUser-ALT/Just-X-Universal/main/Modules/EntityImport.lua?v=0d29806"
-    local entityModuleOk, EntityImportModule = pcall(function()
-        local source = game:HttpGet(ENTITY_IMPORT_MODULE_URL)
-        local chunk = loadstring(source)
-        if type(chunk) ~= "function" then
-            error("Entity Import module did not compile")
-        end
-        return chunk()
-    end)
-
-    if entityModuleOk and type(EntityImportModule) == "function" then
-        local setupOk, stopFunction = pcall(EntityImportModule, SkinSection, JL, clearSkinPreview, prepareForEntityPreview)
-        if setupOk and type(stopFunction) == "function" then
-            stopEntityPreview = stopFunction
-        elseif not setupOk then
-            warn("[Just X Universal] Entity Import setup failed:", stopFunction)
-        end
-    else
-        warn("[Just X Universal] Could not load Entity Import module:", EntityImportModule)
-    end
     
     LocalPlayer.CharacterAdded:Connect(function(character)
         clearSkinPreview()
