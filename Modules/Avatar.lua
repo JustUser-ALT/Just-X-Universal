@@ -1140,7 +1140,12 @@ return function(Window, JL)
         end
         for _, group in ipairs(skinAnimationTypes) do
             if skinApplySlots[group.Name] then
-                for _, slot in ipairs(group.Slots) do result[slot] = skinApplyMap[slot] end
+                for _, slot in ipairs(group.Slots) do
+                    local id = skinApplyMap[slot]
+                    if group.Name == "Idle" and not id then id = skinApplyMap.idle1 or skinApplyMap.idle2 or skinApplyMap.idle end
+                    if group.Name == "Swim" and not id then id = skinApplyMap.swim or skinApplyMap.swimidle end
+                    if id then result[slot] = id end
+                end
             end
         end
         activeAnimationMap = result
@@ -1155,6 +1160,7 @@ return function(Window, JL)
     end
 
     local SkinPreview, skinPreviewTab, skinPreviewAsset, skinAnimationsPage, skinPreviewSourceModel
+    local skinPreviewRequestToken = 0
 
     local function previewButton(parent, text, position, size)
         local button = Instance.new("TextButton")
@@ -1315,6 +1321,8 @@ return function(Window, JL)
 
     local function openSavedSkinPreview(skin)
         if not skin or type(skin.Data) ~= "table" then return end
+        skinPreviewRequestToken = skinPreviewRequestToken + 1
+        local requestToken = skinPreviewRequestToken
         ensureSkinPreview()
         if not SkinPreview or SkinPreview.IsStub or not skinPreviewAsset then return end
         task.spawn(function()
@@ -1326,10 +1334,13 @@ return function(Window, JL)
                 return created
             end)
             if not ok or not modelOrError then
-                if JL.Notify then JL:Notify({Title = "Skin Preview", Desc = "Could not create preview: " .. tostring(modelOrError), Type = "Error", Duration = 5}) end
+                if requestToken == skinPreviewRequestToken and JL.Notify then JL:Notify({Title = "Skin Preview", Desc = "Could not create preview: " .. tostring(modelOrError), Type = "Error", Duration = 5}) end
                 return
             end
-            if not SkinPreview or not SkinPreview.alive then pcall(function() modelOrError:Destroy() end); return end
+            if requestToken ~= skinPreviewRequestToken or not SkinPreview or not SkinPreview.alive then
+                pcall(function() modelOrError:Destroy() end)
+                return
+            end
             local okMap, map = pcall(resolveSelectedSkinAnimationMap, skin.Data)
             if skinPreviewSourceModel then pcall(function() skinPreviewSourceModel:Destroy() end) end
             skinPreviewSourceModel = modelOrError
