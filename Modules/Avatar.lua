@@ -1177,6 +1177,14 @@ return function(Window, JL)
     local function buildSkinAnimationsPage(parent, asset)
         local alive, track, animation, model = true, nil, nil, nil
         local map = type(asset.AnimationMap) == "table" and asset.AnimationMap or {}
+        local scroll = Instance.new("ScrollingFrame")
+        scroll.Size = UDim2.fromScale(1, 1)
+        scroll.BackgroundTransparency = 1
+        scroll.BorderSizePixel = 0
+        scroll.ScrollBarThickness = 4
+        scroll.CanvasSize = UDim2.new(0, 0, 0, 470)
+        scroll.Parent = parent
+        parent = scroll
         local status = Instance.new("TextLabel")
         status.BackgroundTransparency = 1
         status.Position = UDim2.fromOffset(8, 4)
@@ -1295,7 +1303,6 @@ return function(Window, JL)
         skinPreviewAsset = skinPreviewTab:Asset({
             Name = "Select a skin",
             Type = "Avatar",
-            Preview = false,
             Description = "Saved skin preview"
         })
         skinAnimationsPage = SkinPreview:Page({
@@ -2041,6 +2048,20 @@ if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin resto
                 Flag = "JXU_SkinLoadAnimations",
                 Callback = function(value)
                     skinLoadAnimations = value == true
+                    if selectedSkin then
+                        local ok, map = pcall(resolveSelectedSkinAnimationMap, selectedSkin.Data)
+                        if ok then
+                            if skinPreviewAsset and skinPreviewAsset.SkinData == selectedSkin.Data then
+                                skinPreviewAsset:Update({AnimationMap = map})
+                            end
+                            if skinApplyActive() then
+                                skinApplyMap = map
+                                rebuildSkinAnimationApply()
+                            end
+                        elseif JL.Notify then
+                            JL:Notify({Title = "Skin Changer", Desc = "Could not update animation source: " .. tostring(map), Type = "Warn", Duration = 4})
+                        end
+                    end
                 end
             }
         },
