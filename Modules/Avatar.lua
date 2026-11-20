@@ -1629,20 +1629,6 @@ return function(Window, JL)
     end
     
     local function applySkinData(data, loadAnimations)
-        local nextAnimationMap
-        if loadAnimations then
-            local okDescription, description = pcall(skinDataToDescription, data)
-            if okDescription then
-                local okAnimations, result = pcall(resolveSkinAnimationMap, description)
-                pcall(function() description:Destroy() end)
-                if okAnimations then
-                    nextAnimationMap = result
-                elseif JL.Notify then
-                    JL:Notify({Title = "Skin Changer", Desc = "Skin will load, but its animations could not be resolved: " .. tostring(result), Type = "Warn", Duration = 5})
-                end
-            end
-        end
-    
         if skinPreviewBuilding then
             if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "A skin is already loading", Type = "Info", Duration = 3}) end
             return false
@@ -1658,16 +1644,8 @@ return function(Window, JL)
             return false
         end
     
-        if not activeSkinData and previousSkinAnimationMap == nil then
-            previousSkinAnimationMap = table.clone(activeAnimationMap)
-        end
         activeSkinData = data
-    
-        if loadAnimations and nextAnimationMap then
-            activeAnimationMap = nextAnimationMap
-            queueAnimationReapply(true)
-        end
-    
+
         return true
     end
     
@@ -1732,13 +1710,7 @@ return function(Window, JL)
         clearSkinPreview()
         activeSkinData = nil
     
-        if previousSkinAnimationMap ~= nil then
-            activeAnimationMap = previousSkinAnimationMap
-            previousSkinAnimationMap = nil
-            queueAnimationReapply(true)
-        end
-    
-        if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin restored", Type = "Success", Duration = 4}) end
+if JL.Notify then JL:Notify({Title = "Skin Changer", Desc = "Original skin restored", Type = "Success", Duration = 4}) end
     end
     
     loadSkinConfig()
