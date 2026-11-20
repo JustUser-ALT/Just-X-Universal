@@ -1229,6 +1229,10 @@ return function(Window, JL)
             local id = getId(name)
             local humanoid = model and model:FindFirstChildOfClass("Humanoid")
             local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+            if humanoid and not animator then
+                animator = Instance.new("Animator")
+                animator.Parent = humanoid
+            end
             if not id or not animator then status.Text = name .. " animation is unavailable"; return end
             animation = Instance.new("Animation")
             animation.AnimationId = "rbxassetid://" .. tostring(id):gsub("^rbxassetid://", "")
